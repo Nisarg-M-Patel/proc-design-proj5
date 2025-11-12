@@ -337,10 +337,15 @@ module DE_STAGE(
       reg_file[i] = '0;
   end
 
-  // register file update
+  // register file update - MODIFIED to exclude ALU registers
   always @ (negedge clk) begin 
     if (wr_reg_WB) begin
-		  reg_file[wregno_WB] <= regval_WB; 
+      // Don't write ALU registers to normal register file
+      if ((wregno_WB != `ALUOP_REG_IDX) && 
+          (wregno_WB != `OP1_REG_IDX) && 
+          (wregno_WB != `OP2_REG_IDX)) begin
+        reg_file[wregno_WB] <= regval_WB; 
+      end
     end
   end
 
@@ -392,7 +397,6 @@ module DE_STAGE(
   //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
   //Need to handle the stalls from part2 
 
-
   // External ALU Integration
   
   // Unpack signals from FU stage
@@ -406,23 +410,6 @@ module DE_STAGE(
   wire is_load_op2 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP2_REG_IDX);
   wire is_store_op3 = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `OP3_REG_IDX);
   wire is_store_csr_out = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `CSR_OUT_REG_IDX);
-  
-  // Override register read values for store operations involving ALU registers
-  wire [`DBITS-1:0] rs1_val_final_DE;
-  wire [`DBITS-1:0] rs2_val_final_DE;
-  
-  assign rs1_val_final_DE = rs1_val_DE; // rs1 doesn't need bypass for ALU ops
-  assign rs2_val_final_DE = (rs2_DE == 5'd27) ? OP3_from_FU :  // Register 27 gets ALU result
-                          (rs2_DE == `CSR_OUT_REG_IDX) ? {{29{1'b0}}, CSR_ALU_OUT_from_FU} :
-                          rs2_val_DE;
-
-  //Prevent ALU register writes to register file
-  wire wr_reg_final_DE;
-  assign wr_reg_final_DE = wr_reg_DE && 
-                           (rd_DE != `ALUOP_REG_IDX) && 
-                           (rd_DE != `OP1_REG_IDX) && 
-                           (rd_DE != `OP2_REG_IDX);
-
 
   // ALU control registers
   reg [`ALUDATABITS-1:0] OP1_reg;
@@ -430,39 +417,132 @@ module DE_STAGE(
   reg [`ALUOPBITS-1:0] ALUOP_reg;
   reg [`ALUCSRINBITS-1:0] CSR_ALU_IN_reg;
 
-  // Update ALU control registers
-always @(posedge clk) begin
-  if (reset) begin
-    OP1_reg <= '0;
-    OP2_reg <= '0;
-    ALUOP_reg <= '0;
-    CSR_ALU_IN_reg <= 3'b000;
-  end else begin
-    // Load ALUOP
-    if (is_load_aluop && !pipeline_stall_DE) begin
-      ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];  // No swapping needed
-    end
+  // ALU State Machine
+  reg [2:0] alu_state;
+  parameter ALU_IDLE = 3'b000;
+  parameter ALU_WAIT_OP1_READY = 3'b001; 
+  parameter ALU_LOAD_OP1 = 3'b010;
+  parameter ALU_WAIT_OP2_READY = 3'b011;
+  parameter ALU_LOAD_OP2 = 3'b100;
+  parameter ALU_WAIT_RESULT = 3'b101;
+  parameter ALU_READ_RESULT = 3'b110;
 
+  // Track when ALU data is valid
+  reg alu_op_pending;
+  reg op1_data_valid, op2_data_valid;
 
-    // Load OP1 and signal it's stable
-    if (is_load_op1 && !pipeline_stall_DE) begin
-      OP1_reg <= rs2_val_DE;
+  // Intercept writeback for ALU register loads
+  always @(posedge clk) begin
+    if (reset) begin
+      OP1_reg <= '0;
+      OP2_reg <= '0;
+      ALUOP_reg <= '0;
+      op1_data_valid <= 1'b0;
+      op2_data_valid <= 1'b0;
+      alu_op_pending <= 1'b0;
+    end else begin
+      // Capture ALU register loads from writeback
+      if (wr_reg_WB) begin
+        case (wregno_WB)
+          `ALUOP_REG_IDX: begin
+            ALUOP_reg <= regval_WB[`ALUOPBITS-1:0];
+            alu_op_pending <= 1'b1;
+          end
+          `OP1_REG_IDX: begin
+            OP1_reg <= regval_WB;
+            op1_data_valid <= 1'b1;
+          end
+          `OP2_REG_IDX: begin
+            OP2_reg <= regval_WB;
+            op2_data_valid <= 1'b1;
+          end
+        endcase
+      end
+      
+      // Reset flags when ALU operation completes
+      if (alu_state == ALU_READ_RESULT) begin
+        alu_op_pending <= 1'b0;
+        op1_data_valid <= 1'b0;
+        op2_data_valid <= 1'b0;
+      end
     end
-    
-    // Load OP2 and signal it's stable
-    if (is_load_op2 && !pipeline_stall_DE) begin
-      OP2_reg <= rs2_val_DE;
-    end
-
-    // SIMPLE control signal management - just pulse for one cycle
-    CSR_ALU_IN_reg[1] <= (is_load_op1 && !pipeline_stall_DE);
-    CSR_ALU_IN_reg[2] <= (is_load_op2 && !pipeline_stall_DE);
-    CSR_ALU_IN_reg[0] <= (is_store_op3 && !pipeline_stall_DE);
   end
-end
+
+  // ALU State Machine for handshaking protocol
+  always @(posedge clk) begin
+    if (reset) begin
+      CSR_ALU_IN_reg <= 3'b000;
+      alu_state <= ALU_IDLE;
+    end else begin
+      case (alu_state)
+        ALU_IDLE: begin
+          CSR_ALU_IN_reg <= 3'b000;
+          if (alu_op_pending && op1_data_valid) begin
+            alu_state <= ALU_WAIT_OP1_READY;
+          end
+        end
+        
+        ALU_WAIT_OP1_READY: begin
+          if (CSR_ALU_OUT_from_FU[0]) begin // ALU ready for OP1
+            alu_state <= ALU_LOAD_OP1;
+            CSR_ALU_IN_reg[1] <= 1'b1; // Signal OP1 stable
+          end
+        end
+        
+        ALU_LOAD_OP1: begin
+          CSR_ALU_IN_reg[1] <= 1'b0;
+          if (op2_data_valid) begin
+            alu_state <= ALU_WAIT_OP2_READY;
+          end
+        end
+        
+        ALU_WAIT_OP2_READY: begin
+          if (CSR_ALU_OUT_from_FU[1]) begin // ALU ready for OP2  
+            alu_state <= ALU_LOAD_OP2;
+            CSR_ALU_IN_reg[2] <= 1'b1; // Signal OP2 stable
+          end
+        end
+        
+        ALU_LOAD_OP2: begin
+          CSR_ALU_IN_reg[2] <= 1'b0;
+          alu_state <= ALU_WAIT_RESULT;
+        end
+        
+        ALU_WAIT_RESULT: begin
+          if (CSR_ALU_OUT_from_FU[2]) begin // Result valid
+            alu_state <= ALU_READ_RESULT;
+            CSR_ALU_IN_reg[0] <= 1'b1; // Signal result can be overwritten
+          end
+        end
+        
+        ALU_READ_RESULT: begin
+          // Wait for store operation to complete
+          if (is_store_op3 && !pipeline_stall_DE) begin
+            alu_state <= ALU_IDLE;
+            CSR_ALU_IN_reg[0] <= 1'b0;
+          end
+        end
+      endcase
+    end
+  end
+
+  // Override register read values for store operations involving ALU registers
+  wire [`DBITS-1:0] rs1_val_final_DE;
+  wire [`DBITS-1:0] rs2_val_final_DE;
+  
+  assign rs1_val_final_DE = rs1_val_DE; // rs1 doesn't need bypass for ALU ops
+  assign rs2_val_final_DE = (rs2_DE == `OP3_REG_IDX) ? OP3_from_FU :  
+                          (rs2_DE == `CSR_OUT_REG_IDX) ? {{29{1'b0}}, CSR_ALU_OUT_from_FU} :
+                          rs2_val_DE;
+
+  // Prevent ALU register writes to register file
+  wire wr_reg_final_DE;
+  assign wr_reg_final_DE = wr_reg_DE && 
+                           (rd_DE != `ALUOP_REG_IDX) && 
+                           (rd_DE != `OP1_REG_IDX) && 
+                           (rd_DE != `OP2_REG_IDX);
 
   // Pack signals to FU stage
   assign from_DE_to_FU = {CSR_ALU_IN_reg, ALUOP_reg, OP2_reg, OP1_reg};
-
 
 endmodule
