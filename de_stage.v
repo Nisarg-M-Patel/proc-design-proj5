@@ -352,14 +352,14 @@ module DE_STAGE(
     pcplus_DE,
     pcnext_DE,
     op_I_DE,
-    rs1_val_DE,
-    rs2_val_DE,    
+    rs1_val_final_DE, //changed
+    rs2_val_final_DE, //changed
     sxt_imm_DE,
     is_br_DE,
     is_jmp_DE,
     rd_mem_DE,
     wr_mem_DE,
-    wr_reg_DE,
+    wr_reg_final_DE, //changed
     rd_DE,
     pc_xor_bhr_DE
   };
@@ -405,6 +405,24 @@ module DE_STAGE(
   wire is_load_op1 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP1_REG_IDX);
   wire is_load_op2 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP2_REG_IDX);
   wire is_store_op3 = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `OP3_REG_IDX);
+  wire is_store_csr_out = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `CSR_OUT_REG_IDX);
+  
+  // Override register read values for store operations involving ALU registers
+  wire [`DBITS-1:0] rs1_val_final_DE;
+  wire [`DBITS-1:0] rs2_val_final_DE;
+  
+  assign rs1_val_final_DE = rs1_val_DE; // rs1 doesn't need bypass for ALU ops
+  assign rs2_val_final_DE = (rs2_DE == `OP3_REG_IDX) ? OP3_from_FU :
+                            (rs2_DE == `CSR_OUT_REG_IDX) ? {{29{1'b0}}, CSR_ALU_OUT_from_FU} :
+                            rs2_val_DE;
+
+  //Prevent ALU register writes to register file
+  wire wr_reg_final_DE;
+  assign wr_reg_final_DE = wr_reg_DE && 
+                           (rd_DE != `ALUOP_REG_IDX) && 
+                           (rd_DE != `OP1_REG_IDX) && 
+                           (rd_DE != `OP2_REG_IDX);
+
 
   // ALU control registers
   reg [`ALUDATABITS-1:0] OP1_reg;
@@ -425,7 +443,11 @@ module DE_STAGE(
 
       // Load ALUOP
       if (is_load_aluop && !pipeline_stall_DE) begin
-        ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
+        case(rs2_val_DE[`ALUOPBITS-1:0])
+        4'd1: ALUOP_reg <= 4'd2;  // MUL: CPU sends 1, ALU expects 2
+        4'd2: ALUOP_reg <= 4'd1;  // DIV: CPU sends 2, ALU expects 1  
+        default: ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
+        endcase
       end
 
       // Load OP1 and signal it's stable
