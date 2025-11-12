@@ -545,10 +545,7 @@ module DE_STAGE(
 
   // Prevent ALU register writes to register file
   wire wr_reg_final_DE;
-  assign wr_reg_final_DE = wr_reg_DE && 
-                           (rd_DE != `ALUOP_REG_IDX) && 
-                           (rd_DE != `OP1_REG_IDX) && 
-                           (rd_DE != `OP2_REG_IDX);
+  assign wr_reg_final_DE = wr_reg_DE;
 
   // Pack signals to FU stage
   assign from_DE_to_FU = {CSR_ALU_IN_reg, ALUOP_reg, OP2_reg, OP1_reg};
