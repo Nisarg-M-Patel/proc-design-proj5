@@ -303,12 +303,14 @@ module DE_STAGE(
   // External ALU Integration
   /////////////////////////////////////////////////////////////////////////////
   
-  // Unpack signals from FU stage
+  // Unpack signals from FU stage (35-bit bus)
   wire [`DBITS-1:0] op3_from_fu;
-  wire [`DBITS-1:0] csr_out_from_fu;
+  wire [2:0] csr_out_from_fu;
   wire alu_busy_from_fu;
   
-  assign {alu_busy_from_fu, csr_out_from_fu, op3_from_fu} = from_FU_to_DE;
+  assign op3_from_fu = {from_FU_to_DE[30], from_FU_to_DE[30:0]};  // Sign-extend bit 30
+  assign csr_out_from_fu = from_FU_to_DE[33:31];
+  assign alu_busy_from_fu = from_FU_to_DE[34];
   
   // Detect ALU register operations
   wire is_wr_aluop = wr_reg_WB && (wregno_WB == 5'd29);
@@ -317,19 +319,20 @@ module DE_STAGE(
   wire is_rd_op3   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd27);
   wire is_rd_csr   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd26);
   
-  // Pack signals to FU stage
+  // Pack signals to FU stage (71-bit bus)
   assign from_DE_to_FU = {
-    is_rd_op3,      // 1 bit - reading OP3
-    regval_WB,      // 32 bits - write data
-    is_wr_op2,      // 1 bit - writing OP2
-    is_wr_op1,      // 1 bit - writing OP1
-    is_wr_aluop     // 1 bit - writing ALUOP
+    {35{1'b0}},     // Bits [70:36] - unused padding
+    is_rd_op3,      // Bit [35]
+    regval_WB,      // Bits [34:3]
+    is_wr_op2,      // Bit [2]
+    is_wr_op1,      // Bit [1]
+    is_wr_aluop     // Bit [0]
   };
   
   // Override rs2_val for SW instructions reading from ALU registers
   wire [`DBITS-1:0] rs2_val_final_DE;
   assign rs2_val_final_DE = (rs2_DE == 5'd27) ? op3_from_fu :
-                            (rs2_DE == 5'd26) ? csr_out_from_fu :
+                            (rs2_DE == 5'd26) ? {{29{1'b0}}, csr_out_from_fu} :
                             rs2_val_DE;
   
   // Stall if trying to load to ALU registers while ALU is busy

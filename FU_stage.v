@@ -7,14 +7,19 @@ module FU_STAGE(
   output wire [`from_FU_to_DE_WIDTH-1:0] from_FU_to_DE
 );
 
-  // Unpack inputs from DE
+  // Unpack inputs from DE (use only what we need from the 71-bit bus)
   wire wr_aluop;
   wire wr_op1;
   wire wr_op2;
   wire [`DBITS-1:0] wr_data;
   wire rd_op3;
   
-  assign {rd_op3, wr_data, wr_op2, wr_op1, wr_aluop} = from_DE_to_FU;
+  assign wr_aluop = from_DE_to_FU[0];
+  assign wr_op1 = from_DE_to_FU[1];
+  assign wr_op2 = from_DE_to_FU[2];
+  assign wr_data = from_DE_to_FU[34:3];
+  assign rd_op3 = from_DE_to_FU[35];
+  // Bits [70:36] unused
 
   // ALU register storage
   reg [`ALUOPBITS-1:0] ALUOP_reg;
@@ -124,14 +129,15 @@ module FU_STAGE(
   wire alu_busy;
   assign alu_busy = (state != IDLE);
   
-  // Pack outputs to DE
+  // Pack outputs to DE (fit into 35-bit bus)
+  // Format: alu_busy(1) + CSR_ALU_OUT(3) + OP3(31 bits, truncated)
   assign from_FU_to_DE = {
-    alu_busy,                          // 1 bit
-    {{29{1'b0}}, CSR_ALU_OUT},        // 32 bits (padded)
-    OP3                                // 32 bits
+    alu_busy,              // bit [34]
+    CSR_ALU_OUT,          // bits [33:31]
+    OP3[30:0]             // bits [30:0]
   };
   
-  // Instantiate external ALU wrapper
+  // Instantiate external ALU
   external_alu ext_alu (
     .clk(clk),
     .rst(reset),
