@@ -456,6 +456,9 @@ module DE_STAGE(
             OP2_reg <= regval_WB;
             op2_data_valid <= 1'b1;
           end
+          default: begin
+            // Do nothing for other registers
+          end
         endcase
       end
       
@@ -521,6 +524,11 @@ module DE_STAGE(
             alu_state <= ALU_IDLE;
             CSR_ALU_IN_reg[0] <= 1'b0;
           end
+        end
+        default: begin
+          // Reset to idle state for any unexpected state
+          alu_state <= ALU_IDLE;
+          CSR_ALU_IN_reg <= 3'b000;
         end
       endcase
     end
