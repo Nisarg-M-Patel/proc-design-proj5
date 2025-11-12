@@ -412,9 +412,9 @@ module DE_STAGE(
   wire [`DBITS-1:0] rs2_val_final_DE;
   
   assign rs1_val_final_DE = rs1_val_DE; // rs1 doesn't need bypass for ALU ops
-  assign rs2_val_final_DE = (rs2_DE == `OP3_REG_IDX) ? OP3_from_FU :
-                            (rs2_DE == `CSR_OUT_REG_IDX) ? {{29{1'b0}}, CSR_ALU_OUT_from_FU} :
-                            rs2_val_DE;
+  assign rs2_val_final_DE = (rs2_DE == 5'd27) ? OP3_from_FU :  // Register 27 gets ALU result
+                          (rs2_DE == `CSR_OUT_REG_IDX) ? {{29{1'b0}}, CSR_ALU_OUT_from_FU} :
+                          rs2_val_DE;
 
   //Prevent ALU register writes to register file
   wire wr_reg_final_DE;
