@@ -132,7 +132,7 @@ module FU_STAGE(
   };
   
   // Instantiate external ALU wrapper
-  external_alu_wrapper ext_alu (
+  external_alu ext_alu (
     .clk(clk),
     .rst(reset),
     .OP1(OP1_reg),
