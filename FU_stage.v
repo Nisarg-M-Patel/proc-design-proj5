@@ -107,11 +107,11 @@ module FU_STAGE(
         end
         
         COMPUTING: begin
-          CSR_ALU_IN[0] <= 1'b0;     // Allow ALU to write result
-          
           if (CSR_ALU_OUT[2]) begin  // Result valid
-            CSR_ALU_IN[0] <= 1'b1;   // Protect result
+            CSR_ALU_IN[0] <= 1'b1;   // NOW protect result
             state <= RESULT_READY;
+          end else begin
+            CSR_ALU_IN[0] <= 1'b0;   // Keep allowing ALU to write
           end
         end
         
