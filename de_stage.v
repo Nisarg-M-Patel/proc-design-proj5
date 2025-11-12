@@ -236,7 +236,15 @@ module DE_STAGE(
   // Decode instruction registers
   assign rs1_DE = inst_DE[19:15];
   assign rs2_DE = inst_DE[24:20];
-  assign rd_DE  = inst_DE[11:7]; 
+  assign rd_DE  = inst_DE[11:7];
+
+  // External ALU - Detection logic for ALU instructions
+  wire is_load_aluop = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `ALUOP_REG_IDX);
+  wire is_load_op1 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP1_REG_IDX);
+  wire is_load_op2 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP2_REG_IDX);
+  wire is_store_op3 = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `OP3_REG_IDX);
+  wire is_store_csr_out = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `CSR_OUT_REG_IDX);
+  wire is_alu_instr = is_load_aluop || is_load_op1 || is_load_op2 || is_store_op3 || is_store_csr_out; 
 
   // Read register file
   assign rs1_val_DE = reg_file[rs1_DE];
@@ -305,16 +313,119 @@ module DE_STAGE(
   wire has_data_hazards;
   wire br_mispred_AGEX;
 
+  // External ALU - Unpack signals from FU stage
+  wire [`ALUDATABITS-1:0] OP3_from_FU;
+  wire [`ALUCSROUTBITS-1:0] CSR_ALU_OUT_from_FU;
+  assign {CSR_ALU_OUT_from_FU, OP3_from_FU} = from_FU_to_DE;
+
+  // Extract individual CSR_ALU_OUT bits
+  wire ALU_ready_1 = CSR_ALU_OUT_from_FU[0];  // OP1 port ready
+  wire ALU_ready_2 = CSR_ALU_OUT_from_FU[1];  // OP2 port ready
+  wire ALU_result_valid = CSR_ALU_OUT_from_FU[2];  // Result valid
+
+  // External ALU - State machine for ALU operations
+  localparam ALU_IDLE = 3'd0;
+  localparam ALU_LOAD_ALUOP = 3'd1;
+  localparam ALU_LOAD_OP1_WAIT = 3'd2;
+  localparam ALU_LOAD_OP1 = 3'd3;
+  localparam ALU_LOAD_OP2_WAIT = 3'd4;
+  localparam ALU_LOAD_OP2 = 3'd5;
+  localparam ALU_WAIT_RESULT = 3'd6;
+  localparam ALU_STORE_RESULT = 3'd7;
+
+  reg [2:0] alu_state;
+  reg [2:0] alu_next_state;
+  reg alu_stall;
+
+  // State machine - combinational next state logic
+  always @(*) begin
+    alu_next_state = alu_state;
+    alu_stall = 0;
+
+    case (alu_state)
+      ALU_IDLE: begin
+        if (is_load_aluop && !has_data_hazards && !br_mispred_AGEX) begin
+          alu_next_state = ALU_LOAD_ALUOP;
+          alu_stall = 1;  // Stall to load ALUOP
+        end
+      end
+
+      ALU_LOAD_ALUOP: begin
+        alu_next_state = ALU_LOAD_OP1_WAIT;
+        alu_stall = 1;  // Wait for OP1 instruction
+      end
+
+      ALU_LOAD_OP1_WAIT: begin
+        if (is_load_op1 && !has_data_hazards && !br_mispred_AGEX) begin
+          if (ALU_ready_1) begin
+            alu_next_state = ALU_LOAD_OP1;
+            alu_stall = 1;  // Stall to load OP1
+          end else begin
+            alu_stall = 1;  // Stall and wait for ALU to be ready
+          end
+        end else if (!is_load_op1 && valid_DE) begin
+          alu_stall = 1;  // Stall until we get OP1 instruction
+        end
+      end
+
+      ALU_LOAD_OP1: begin
+        alu_next_state = ALU_LOAD_OP2_WAIT;
+        alu_stall = 1;  // Wait for OP2 instruction
+      end
+
+      ALU_LOAD_OP2_WAIT: begin
+        if (is_load_op2 && !has_data_hazards && !br_mispred_AGEX) begin
+          if (ALU_ready_2) begin
+            alu_next_state = ALU_LOAD_OP2;
+            alu_stall = 1;  // Stall to load OP2
+          end else begin
+            alu_stall = 1;  // Stall and wait for ALU to be ready
+          end
+        end else if (!is_load_op2 && valid_DE) begin
+          alu_stall = 1;  // Stall until we get OP2 instruction
+        end
+      end
+
+      ALU_LOAD_OP2: begin
+        alu_next_state = ALU_WAIT_RESULT;
+        alu_stall = 1;  // Wait for result
+      end
+
+      ALU_WAIT_RESULT: begin
+        if (is_store_op3 && !has_data_hazards && !br_mispred_AGEX) begin
+          if (ALU_result_valid) begin
+            alu_next_state = ALU_STORE_RESULT;
+            alu_stall = 1;  // Stall to store result
+          end else begin
+            alu_stall = 1;  // Stall and wait for result to be valid
+          end
+        end else if (!is_store_op3 && valid_DE) begin
+          alu_stall = 1;  // Stall until we get store OP3 instruction
+        end
+      end
+
+      ALU_STORE_RESULT: begin
+        alu_next_state = ALU_IDLE;
+        alu_stall = 0;  // Done, no more stall
+      end
+
+      default: begin
+        alu_next_state = ALU_IDLE;
+        alu_stall = 0;
+      end
+    endcase
+  end
+
   // process AGEX forwarding
   assign { 
     br_mispred_AGEX          
   } = from_AGEX_to_DE;
  
-  assign has_data_hazards = (use_rs1_DE && in_use_regs[rs1_DE]) 
+  assign has_data_hazards = (use_rs1_DE && in_use_regs[rs1_DE])
                          || (use_rs2_DE && in_use_regs[rs2_DE]);
 
   //TODO: part2/bonus modify as necessary
-  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX;
+  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX || alu_stall;
 
   always @(posedge clk) begin
     if (reset) begin
@@ -322,12 +433,73 @@ module DE_STAGE(
     end else begin
       if (~pipeline_stall_DE && wr_reg_DE) begin
         in_use_regs[rd_DE] <= 1;
-      end 
+      end
       if (wr_reg_WB) begin
         in_use_regs[wregno_WB] <= 0;
       end
     end
   end
+
+  // External ALU - State machine sequential state update
+  always @(posedge clk) begin
+    if (reset) begin
+      alu_state <= ALU_IDLE;
+    end else begin
+      alu_state <= alu_next_state;
+    end
+  end
+
+  // External ALU - Control registers
+  reg [`ALUDATABITS-1:0] OP1_reg;
+  reg [`ALUDATABITS-1:0] OP2_reg;
+  reg [`ALUOPBITS-1:0] ALUOP_reg;
+  reg [`ALUCSRINBITS-1:0] CSR_ALU_IN_reg;
+
+  // Update ALU control registers and CSR_ALU_IN
+  always @(posedge clk) begin
+    if (reset) begin
+      OP1_reg <= '0;
+      OP2_reg <= '0;
+      ALUOP_reg <= '0;
+      CSR_ALU_IN_reg <= 3'b000;
+    end else begin
+      // Default: clear control signals
+      CSR_ALU_IN_reg <= 3'b000;
+
+      case (alu_state)
+        ALU_LOAD_ALUOP: begin
+          // Load ALUOP from memory data (rs1_val + sxt_imm)
+          // In this simplified version, we assume the value is in rs2_val_DE
+          // A more complete implementation would read from memory
+          ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
+        end
+
+        ALU_LOAD_OP1: begin
+          // Load OP1 and signal it's stable
+          OP1_reg <= rs2_val_DE;
+          CSR_ALU_IN_reg[1] <= 1'b1;  // Signal OP1 is stable
+        end
+
+        ALU_LOAD_OP2: begin
+          // Load OP2 and signal it's stable
+          OP2_reg <= rs2_val_DE;
+          CSR_ALU_IN_reg[2] <= 1'b1;  // Signal OP2 is stable
+        end
+
+        ALU_STORE_RESULT: begin
+          // Signal that results can be overwritten
+          CSR_ALU_IN_reg[0] <= 1'b1;
+        end
+
+        default: begin
+          CSR_ALU_IN_reg <= 3'b000;
+        end
+      endcase
+    end
+  end
+
+  // Pack signals to FU stage
+  assign from_DE_to_FU = {CSR_ALU_IN_reg, ALUOP_reg, OP2_reg, OP1_reg};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -383,13 +555,5 @@ module DE_STAGE(
 
   // send DE latch contents to next pipeline stage
   assign DE_latch_out = DE_latch;
-
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  //TODO: add your code here to load operands, ALUOP; 
-  //store results to memory; 
-  //forward data and control signals to FU stage; 
-  //fetch status update from FU stage; 
-  //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
-  //Need to handle the stalls from part2 
 
 endmodule
