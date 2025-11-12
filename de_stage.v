@@ -392,4 +392,63 @@ module DE_STAGE(
   //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
   //Need to handle the stalls from part2 
 
+
+  // External ALU Integration
+  
+  // Unpack signals from FU stage
+  wire [`ALUDATABITS-1:0] OP3_from_FU;
+  wire [`ALUCSROUTBITS-1:0] CSR_ALU_OUT_from_FU;
+  assign {CSR_ALU_OUT_from_FU, OP3_from_FU} = from_FU_to_DE;
+
+  // Detect ALU instructions
+  wire is_load_aluop = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `ALUOP_REG_IDX);
+  wire is_load_op1 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP1_REG_IDX);
+  wire is_load_op2 = valid_DE && (op_I_DE == `LW_I) && (rd_DE == `OP2_REG_IDX);
+  wire is_store_op3 = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == `OP3_REG_IDX);
+
+  // ALU control registers
+  reg [`ALUDATABITS-1:0] OP1_reg;
+  reg [`ALUDATABITS-1:0] OP2_reg;
+  reg [`ALUOPBITS-1:0] ALUOP_reg;
+  reg [`ALUCSRINBITS-1:0] CSR_ALU_IN_reg;
+
+  // Update ALU control registers
+  always @(posedge clk) begin
+    if (reset) begin
+      OP1_reg <= '0;
+      OP2_reg <= '0;
+      ALUOP_reg <= '0;
+      CSR_ALU_IN_reg <= 3'b000;
+    end else begin
+      // Default: clear control signals
+      CSR_ALU_IN_reg <= 3'b000;
+
+      // Load ALUOP
+      if (is_load_aluop && !pipeline_stall_DE) begin
+        ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
+      end
+
+      // Load OP1 and signal it's stable
+      if (is_load_op1 && !pipeline_stall_DE) begin
+        OP1_reg <= rs2_val_DE;
+        CSR_ALU_IN_reg[1] <= 1'b1;
+      end
+
+      // Load OP2 and signal it's stable
+      if (is_load_op2 && !pipeline_stall_DE) begin
+        OP2_reg <= rs2_val_DE;
+        CSR_ALU_IN_reg[2] <= 1'b1;
+      end
+
+      // Signal results can be overwritten after storing
+      if (is_store_op3 && !pipeline_stall_DE) begin
+        CSR_ALU_IN_reg[0] <= 1'b1;
+      end
+    end
+  end
+
+  // Pack signals to FU stage
+  assign from_DE_to_FU = {CSR_ALU_IN_reg, ALUOP_reg, OP2_reg, OP1_reg};
+
+
 endmodule
