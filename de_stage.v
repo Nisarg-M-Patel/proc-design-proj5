@@ -430,7 +430,8 @@ module DE_STAGE(
   reg [`ALUOPBITS-1:0] ALUOP_reg;
   reg [`ALUCSRINBITS-1:0] CSR_ALU_IN_reg;
 
-  always @(posedge clk) begin
+  // Update ALU control registers
+always @(posedge clk) begin
   if (reset) begin
     OP1_reg <= '0;
     OP2_reg <= '0;
@@ -446,34 +447,20 @@ module DE_STAGE(
       endcase
     end
 
-    // Load OP1 and signal it's stable - HOLD until acknowledged
+    // Load OP1 and signal it's stable
     if (is_load_op1 && !pipeline_stall_DE) begin
       OP1_reg <= rs2_val_DE;
     end
     
-    // Load OP2 and signal it's stable - HOLD until acknowledged  
+    // Load OP2 and signal it's stable
     if (is_load_op2 && !pipeline_stall_DE) begin
       OP2_reg <= rs2_val_DE;
     end
 
-    // Control signal management - don't clear every cycle
-    if (is_load_op1 && !pipeline_stall_DE) begin
-      CSR_ALU_IN_reg[1] <= 1'b1;  // Signal OP1 stable
-    end else if (CSR_ALU_OUT_from_FU[0]) begin  // ALU ready for OP1
-      CSR_ALU_IN_reg[1] <= 1'b0;  // Clear when acknowledged
-    end
-    
-    if (is_load_op2 && !pipeline_stall_DE) begin
-      CSR_ALU_IN_reg[2] <= 1'b1;  // Signal OP2 stable
-    end else if (CSR_ALU_OUT_from_FU[1]) begin  // ALU ready for OP2
-      CSR_ALU_IN_reg[2] <= 1'b0;  // Clear when acknowledged
-    end
-    
-    if (is_store_op3 && !pipeline_stall_DE) begin
-      CSR_ALU_IN_reg[0] <= 1'b1;  // Signal result can be overwritten
-    end else begin
-      CSR_ALU_IN_reg[0] <= 1'b0;  // Clear after one cycle
-    end
+    // SIMPLE control signal management - just pulse for one cycle
+    CSR_ALU_IN_reg[1] <= (is_load_op1 && !pipeline_stall_DE);
+    CSR_ALU_IN_reg[2] <= (is_load_op2 && !pipeline_stall_DE);
+    CSR_ALU_IN_reg[0] <= (is_store_op3 && !pipeline_stall_DE);
   end
 end
 
