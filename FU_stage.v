@@ -132,9 +132,8 @@ module FU_STAGE(
   // Pack outputs to DE (fit into 35-bit bus)
   // Format: alu_busy(1) + CSR_ALU_OUT(3) + OP3(31 bits, truncated)
   assign from_FU_to_DE = {
-    alu_busy,              // bit [34]
     CSR_ALU_OUT,          // bits [33:31]
-    OP3[30:0]             // bits [30:0]
+    OP3[31:0]             // bits [30:0]
   };
   
   // Instantiate external ALU

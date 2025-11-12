@@ -308,8 +308,8 @@ module DE_STAGE(
   wire [2:0] csr_out_from_fu;
   //wire alu_busy_from_fu;
   
-  assign op3_from_fu = {from_FU_to_DE[30], from_FU_to_DE[30:0]};  // Sign-extend bit 30
-  assign csr_out_from_fu = from_FU_to_DE[33:31];
+  assign op3_from_fu = {from_FU_to_DE[31:0]};  // Sign-extend bit 30
+  assign csr_out_from_fu = from_FU_to_DE[34:32];
   //assign alu_busy_from_fu = from_FU_to_DE[34];
   
   // Detect ALU register operations
