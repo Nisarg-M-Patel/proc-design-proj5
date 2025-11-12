@@ -126,8 +126,8 @@ module FU_STAGE(
   end
   
   // ALU is busy when not in IDLE state
-  wire alu_busy;
-  assign alu_busy = (state != IDLE);
+  //wire alu_busy;
+  //assign alu_busy = (state != IDLE);
   
   // Pack outputs to DE (fit into 35-bit bus)
   // Format: alu_busy(1) + CSR_ALU_OUT(3) + OP3(31 bits, truncated)

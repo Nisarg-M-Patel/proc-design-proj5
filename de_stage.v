@@ -306,11 +306,11 @@ module DE_STAGE(
   // Unpack signals from FU stage (35-bit bus)
   wire [`DBITS-1:0] op3_from_fu;
   wire [2:0] csr_out_from_fu;
-  wire alu_busy_from_fu;
+  //wire alu_busy_from_fu;
   
   assign op3_from_fu = {from_FU_to_DE[30], from_FU_to_DE[30:0]};  // Sign-extend bit 30
   assign csr_out_from_fu = from_FU_to_DE[33:31];
-  assign alu_busy_from_fu = from_FU_to_DE[34];
+  //assign alu_busy_from_fu = from_FU_to_DE[34];
   
   // Detect ALU register operations
   wire is_wr_aluop = wr_reg_WB && (wregno_WB == 5'd29);
@@ -336,9 +336,9 @@ module DE_STAGE(
                             rs2_val_DE;
   
   // Stall if trying to load to ALU registers while ALU is busy
-  wire alu_stall;
-  assign alu_stall = alu_busy_from_fu && valid_DE && (op_I_DE == `LW_I) && 
-                     ((rd_DE == 5'd29) || (rd_DE == 5'd30) || (rd_DE == 5'd31));
+  //wire alu_stall;
+  //assign alu_stall = alu_busy_from_fu && valid_DE && (op_I_DE == `LW_I) && 
+  //                   ((rd_DE == 5'd29) || (rd_DE == 5'd30) || (rd_DE == 5'd31));
   
   /////////////////////////////////////////////////////////////////////////////
   // Handle data dependency
@@ -356,7 +356,7 @@ module DE_STAGE(
   assign has_data_hazards = (use_rs1_DE && in_use_regs[rs1_DE]) 
                          || (use_rs2_DE && in_use_regs[rs2_DE]);
 
-  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX || alu_stall;
+  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX;
 
   always @(posedge clk) begin
     if (reset) begin
