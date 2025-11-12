@@ -430,44 +430,52 @@ module DE_STAGE(
   reg [`ALUOPBITS-1:0] ALUOP_reg;
   reg [`ALUCSRINBITS-1:0] CSR_ALU_IN_reg;
 
-  // Update ALU control registers
   always @(posedge clk) begin
-    if (reset) begin
-      OP1_reg <= '0;
-      OP2_reg <= '0;
-      ALUOP_reg <= '0;
-      CSR_ALU_IN_reg <= 3'b000;
+  if (reset) begin
+    OP1_reg <= '0;
+    OP2_reg <= '0;
+    ALUOP_reg <= '0;
+    CSR_ALU_IN_reg <= 3'b000;
+  end else begin
+    // Load ALUOP
+    if (is_load_aluop && !pipeline_stall_DE) begin
+      case(rs2_val_DE[`ALUOPBITS-1:0])
+      4'd1: ALUOP_reg <= 4'd2;  // MUL: CPU sends 1, ALU expects 2
+      4'd2: ALUOP_reg <= 4'd1;  // DIV: CPU sends 2, ALU expects 1  
+      default: ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
+      endcase
+    end
+
+    // Load OP1 and signal it's stable - HOLD until acknowledged
+    if (is_load_op1 && !pipeline_stall_DE) begin
+      OP1_reg <= rs2_val_DE;
+    end
+    
+    // Load OP2 and signal it's stable - HOLD until acknowledged  
+    if (is_load_op2 && !pipeline_stall_DE) begin
+      OP2_reg <= rs2_val_DE;
+    end
+
+    // Control signal management - don't clear every cycle
+    if (is_load_op1 && !pipeline_stall_DE) begin
+      CSR_ALU_IN_reg[1] <= 1'b1;  // Signal OP1 stable
+    end else if (CSR_ALU_OUT_from_FU[0]) begin  // ALU ready for OP1
+      CSR_ALU_IN_reg[1] <= 1'b0;  // Clear when acknowledged
+    end
+    
+    if (is_load_op2 && !pipeline_stall_DE) begin
+      CSR_ALU_IN_reg[2] <= 1'b1;  // Signal OP2 stable
+    end else if (CSR_ALU_OUT_from_FU[1]) begin  // ALU ready for OP2
+      CSR_ALU_IN_reg[2] <= 1'b0;  // Clear when acknowledged
+    end
+    
+    if (is_store_op3 && !pipeline_stall_DE) begin
+      CSR_ALU_IN_reg[0] <= 1'b1;  // Signal result can be overwritten
     end else begin
-      // Default: clear control signals
-      CSR_ALU_IN_reg <= 3'b000;
-
-      // Load ALUOP
-      if (is_load_aluop && !pipeline_stall_DE) begin
-        case(rs2_val_DE[`ALUOPBITS-1:0])
-        4'd1: ALUOP_reg <= 4'd2;  // MUL: CPU sends 1, ALU expects 2
-        4'd2: ALUOP_reg <= 4'd1;  // DIV: CPU sends 2, ALU expects 1  
-        default: ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
-        endcase
-      end
-
-      // Load OP1 and signal it's stable
-      if (is_load_op1 && !pipeline_stall_DE) begin
-        OP1_reg <= rs2_val_DE;
-        CSR_ALU_IN_reg[1] <= 1'b1;
-      end
-
-      // Load OP2 and signal it's stable
-      if (is_load_op2 && !pipeline_stall_DE) begin
-        OP2_reg <= rs2_val_DE;
-        CSR_ALU_IN_reg[2] <= 1'b1;
-      end
-
-      // Signal results can be overwritten after storing
-      if (is_store_op3 && !pipeline_stall_DE) begin
-        CSR_ALU_IN_reg[0] <= 1'b1;
-      end
+      CSR_ALU_IN_reg[0] <= 1'b0;  // Clear after one cycle
     end
   end
+end
 
   // Pack signals to FU stage
   assign from_DE_to_FU = {CSR_ALU_IN_reg, ALUOP_reg, OP2_reg, OP1_reg};
