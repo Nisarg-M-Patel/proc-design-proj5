@@ -440,12 +440,9 @@ always @(posedge clk) begin
   end else begin
     // Load ALUOP
     if (is_load_aluop && !pipeline_stall_DE) begin
-      case(rs2_val_DE[`ALUOPBITS-1:0])
-      4'd1: ALUOP_reg <= 4'd2;  // MUL: CPU sends 1, ALU expects 2
-      4'd2: ALUOP_reg <= 4'd1;  // DIV: CPU sends 2, ALU expects 1  
-      default: ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];
-      endcase
+      ALUOP_reg <= rs2_val_DE[`ALUOPBITS-1:0];  // No swapping needed
     end
+
 
     // Load OP1 and signal it's stable
     if (is_load_op1 && !pipeline_stall_DE) begin
