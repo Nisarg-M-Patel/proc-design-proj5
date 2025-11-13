@@ -25,9 +25,8 @@ module FU_STAGE(
   reg [`ALUDATABITS-1:0] OP1_reg;
   reg [`ALUDATABITS-1:0] OP2_reg;
   
-  // Track if operands have been written
-  reg op1_written;
-  reg op2_written;
+  // Track if operands are ready
+  reg op2_ready;
   
   // ALU interface signals
   wire [`ALUDATABITS-1:0] OP3;
@@ -44,15 +43,6 @@ module FU_STAGE(
   localparam COMPUTING     = 3'd5;
   localparam RESULT_READY  = 3'd6;
   
-  // Debug output
-  always @(posedge clk) begin
-    if (!reset && (wr_aluop || wr_op1 || wr_op2 || rd_op3 || state != IDLE)) begin
-      $display("[%0t] FU: state=%0d, CSR_IN=%b, CSR_OUT=%b, ALUOP=%h, OP1=%h, OP2=%h, OP3=%h, wr_aluop=%b, wr_op1=%b, wr_op2=%b, rd_op3=%b, op1_wr=%b, op2_wr=%b", 
-               $time, state, CSR_ALU_IN, CSR_ALU_OUT, ALUOP_reg, OP1_reg, OP2_reg, OP3, 
-               wr_aluop, wr_op1, wr_op2, rd_op3, op1_written, op2_written);
-    end
-  end
-  
   always @(posedge clk) begin
     if (reset) begin
       state <= IDLE;
@@ -60,34 +50,31 @@ module FU_STAGE(
       ALUOP_reg <= 4'b0;
       OP1_reg <= 32'b0;
       OP2_reg <= 32'b0;
-      op1_written <= 1'b0;
-      op2_written <= 1'b0;
+      op2_ready <= 1'b0;
     end else begin
-      // Capture ALUOP anytime it's written
+      // Capture ALUOP anytime
       if (wr_aluop) begin
         ALUOP_reg <= wr_data[`ALUOPBITS-1:0];
       end
       
-      // Capture OP1 anytime it's written
+      // Capture OP1 anytime
       if (wr_op1) begin
         OP1_reg <= wr_data;
-        op1_written <= 1'b1;
       end
       
-      // Capture OP2 anytime it's written
+      // Capture OP2 anytime and track readiness
       if (wr_op2) begin
         OP2_reg <= wr_data;
-        op2_written <= 1'b1;
+        op2_ready <= 1'b1;
       end
       
       case (state)
         IDLE: begin
           CSR_ALU_IN <= 3'b000;
-          op1_written <= 1'b0;
-          op2_written <= 1'b0;
+          op2_ready <= 1'b0;
           
-          // Start when OP1 has been written
-          if (op1_written) begin
+          // Start immediately when OP1 is written
+          if (wr_op1) begin
             state <= WAIT_OP1;
           end
         end
@@ -105,8 +92,8 @@ module FU_STAGE(
         end
         
         WAIT_OP2: begin
-          // Wait for BOTH OP2 to be written AND ALU to be ready
-          if (op2_written && CSR_ALU_OUT[1]) begin
+          // Wait for BOTH OP2 ready AND ALU ready for OP2
+          if (op2_ready && CSR_ALU_OUT[1]) begin
             CSR_ALU_IN[2] <= 1'b1;   // Signal OP2 is stable
             state <= LOAD_OP2;
           end
@@ -118,7 +105,6 @@ module FU_STAGE(
         end
         
         COMPUTING: begin
-          // Keep checking for result
           if (CSR_ALU_OUT[2]) begin  // Result valid
             CSR_ALU_IN[0] <= 1'b1;   // Protect result
             state <= RESULT_READY;
