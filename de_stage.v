@@ -394,39 +394,137 @@ module DE_STAGE(
   // External ALU Integration
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   
-  // Unpack signals from FU stage (35-bit bus)
-  // Format: CSR_ALU_OUT[34:32] + OP3[31:0]
-  wire [`DBITS-1:0] op3_from_fu;
-  wire [2:0] csr_out_from_fu;
+  // Storage for ALU operation and operands
+  reg [`ALUOPBITS-1:0] alu_operation;
+  reg [`ALUDATABITS-1:0] alu_operand_a;
+  reg [`ALUDATABITS-1:0] alu_operand_b;
   
-  assign op3_from_fu = from_FU_to_DE[31:0];
-  assign csr_out_from_fu = from_FU_to_DE[34:32];
+  // Handshake protocol state machine
+  reg [2:0] alu_protocol_state;
+  reg [2:0] alu_protocol_next;
   
-  // Detect ALU register operations
-  // LW to x29 (ALUOP), x30 (OP1), x31 (OP2) triggers write to ALU
-  wire is_wr_aluop = wr_reg_WB && (wregno_WB == 5'd29);
-  wire is_wr_op1   = wr_reg_WB && (wregno_WB == 5'd30);
-  wire is_wr_op2   = wr_reg_WB && (wregno_WB == 5'd31);
+  localparam STATE_WAIT_OP      = 3'd0;
+  localparam STATE_WAIT_FIRST   = 3'd1;
+  localparam STATE_WAIT_SECOND  = 3'd2;
+  localparam STATE_EXECUTE      = 3'd3;
+  localparam STATE_COMPLETE     = 3'd4;
   
-  // SW from x27 (OP3) or x26 (CSR_ALU_OUT) triggers read from ALU
-  wire is_rd_op3   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd27);
-  wire is_rd_csr   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd26);
+  // Control signals for handshake
+  reg [2:0] handshake_control;
+  wire [2:0] handshake_status;
+  wire [`ALUDATABITS-1:0] alu_output;
   
-  // Pack signals to FU stage (71-bit bus)
-  // Format: padding[70:36] + rd_op3[35] + regval_WB[34:3] + wr_op2[2] + wr_op1[1] + wr_aluop[0]
+  // Status bits from ALU
+  wire first_operand_ready;
+  wire second_operand_ready;
+  wire computation_done;
+  
+  assign first_operand_ready = handshake_status[0];
+  assign second_operand_ready = handshake_status[1];
+  assign computation_done = handshake_status[2];
+  
+  // Connect to FU stage
   assign from_DE_to_FU = {
-    {35{1'b0}},     // Bits [70:36] - unused padding
-    is_rd_op3,      // Bit [35] - CPU is reading OP3
-    regval_WB,      // Bits [34:3] - data being written to ALU registers
-    is_wr_op2,      // Bit [2] - writing OP2
-    is_wr_op1,      // Bit [1] - writing OP1
-    is_wr_aluop     // Bit [0] - writing ALUOP
+    alu_operand_a,
+    alu_operand_b,
+    alu_operation,
+    handshake_control
   };
   
-  // Bypass ALU output for SW instructions
-  // When SW uses x27 or x26 as source, get value from FU instead of register file
-  assign rs2_val_final_DE = (rs2_DE == 5'd27) ? op3_from_fu :
-                            (rs2_DE == 5'd26) ? {{29{1'b0}}, csr_out_from_fu} :
-                            rs2_val_DE;
+  assign {alu_output, handshake_status} = from_FU_to_DE;
+  
+  // Determine if pipeline needs to stall for ALU
+  wire alu_needs_stall;
+  assign alu_needs_stall = 
+    (alu_protocol_state == STATE_WAIT_FIRST && !first_operand_ready) ||
+    (alu_protocol_state == STATE_WAIT_SECOND && !second_operand_ready);
+  
+  // Update state on clock edge
+  always @(posedge clk) begin
+    if (reset)
+      alu_protocol_state <= STATE_WAIT_OP;
+    else
+      alu_protocol_state <= alu_protocol_next;
+  end
+  
+  // Capture operands and manage computation
+  always @(posedge clk) begin
+    if (reset) begin
+      alu_operation <= 4'd0;
+      alu_operand_a <= 32'd0;
+      alu_operand_b <= 32'd0;
+    end else if (!alu_needs_stall) begin
+      // Store result when computation completes
+      if (alu_protocol_state == STATE_EXECUTE && computation_done) begin
+        reg_file[5'd27] <= alu_output;  // Write to x27 (OP3)
+      end
+      // Clear operands at start of new operation
+      else if (alu_protocol_state == STATE_WAIT_OP) begin
+        alu_operand_a <= 32'd0;
+        alu_operand_b <= 32'd0;
+      end
+      // Capture values during writeback phase
+      else if (wr_reg_WB) begin
+        case (wregno_WB)
+          5'd29: alu_operation <= regval_WB[`ALUOPBITS-1:0];  // ALUOP
+          5'd30: alu_operand_a <= regval_WB;                  // OP1
+          5'd31: alu_operand_b <= regval_WB;                  // OP2
+        endcase
+      end
+    end
+  end
+  
+  // State machine and handshake control generation
+  always @(*) begin
+    // Default: stay in current state
+    alu_protocol_next = alu_protocol_state;
+    handshake_control = 3'b000;
+    
+    case (alu_protocol_state)
+      STATE_WAIT_OP: begin
+        // Waiting for operation to begin
+        handshake_control = 3'b000;
+        alu_protocol_next = STATE_WAIT_FIRST;
+      end
+      
+      STATE_WAIT_FIRST: begin
+        // Waiting for first operand acknowledgment
+        handshake_control = 3'b000;
+        if (first_operand_ready && (alu_operand_a != 32'd0)) begin
+          handshake_control = 3'b010;  // Signal first operand ready
+          alu_protocol_next = STATE_WAIT_SECOND;
+        end
+      end
+      
+      STATE_WAIT_SECOND: begin
+        // Waiting for second operand acknowledgment
+        handshake_control = 3'b010;
+        if (second_operand_ready && (alu_operand_b != 32'd0) && (alu_operation != 4'd0)) begin
+          handshake_control = 3'b110;  // Signal second operand ready
+          alu_protocol_next = STATE_EXECUTE;
+        end
+      end
+      
+      STATE_EXECUTE: begin
+        // Computing result
+        handshake_control = 3'b110;
+        if (computation_done) begin
+          handshake_control = 3'b111;  // Lock result
+          alu_protocol_next = STATE_COMPLETE;
+        end
+      end
+      
+      STATE_COMPLETE: begin
+        // Result stored, ready for next operation
+        handshake_control = 3'b111;
+        alu_protocol_next = STATE_WAIT_OP;
+      end
+      
+      default: begin
+        handshake_control = 3'b000;
+        alu_protocol_next = STATE_WAIT_OP;
+      end
+    endcase
+  end
 
 endmodule
