@@ -314,7 +314,7 @@ module DE_STAGE(
                          || (use_rs2_DE && in_use_regs[rs2_DE]);
 
   //TODO: part2/bonus modify as necessary
-  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX || stall_pipeline_ext_alu;
+  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX || stall_for_external_alu;
 
   always @(posedge clk) begin
     if (reset) begin
