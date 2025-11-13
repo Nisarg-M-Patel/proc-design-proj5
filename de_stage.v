@@ -392,128 +392,140 @@ module DE_STAGE(
   //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
   //Need to handle the stalls from part2 
 
-  // Registers for ALU operands and ALUOP
-  reg [`ALUOPBITS - 1: 0] ext_alu_op;
-  reg [`ALUDATABITS - 1: 0] ext_alu_op1;
-  reg [`ALUDATABITS - 1: 0] ext_alu_op2;
+  // External ALU operand and operation registers
+  reg [`ALUOPBITS - 1: 0]    external_alu_operation;      // ALU operation code (div=1, mul=2)
+  reg [`ALUDATABITS - 1: 0]  external_alu_operand_a;      // First operand
+  reg [`ALUDATABITS - 1: 0]  external_alu_operand_b;      // Second operand
 
-    // State transitions are in define
-  reg [`ALU_STATE_BITS - 1: 0] ext_alu_state;
-  reg [`ALU_STATE_BITS - 1: 0] ext_alu_next_state;
+  // State machine registers
+  reg [`EXT_ALU_STATE_BITS - 1: 0] external_alu_current_state;
+  reg [`EXT_ALU_STATE_BITS - 1: 0] external_alu_next_state;
 
-  // Get CSR_ALU_OUT from FU stage from external ALU
-  reg [`ALUCSROUTBITS - 1: 0] csr_alu_out;
+  // Status signals from FU stage (CSR output from external ALU)
+  reg [`ALUCSROUTBITS - 1: 0] external_alu_status_output;
 
-  // Define external ALU result
-  wire [`ALUDATABITS - 1: 0] ext_alu_result;
+  // Result wire from FU stage
+  wire [`ALUDATABITS - 1: 0] external_alu_result;
 
-  // Define CSR_ALU_IN so we can forward
-  reg [`ALUCSRINBITS - 1: 0] csr_alu_in;
+  // Control signals to FU stage (CSR input to external ALU)
+  reg [`ALUCSRINBITS - 1: 0] external_alu_control_input;
 
-  // Forward relevant data to FU stage
+  // Forward operands, operation, and control signals to FU stage
   assign from_DE_to_FU = {
-    ext_alu_op1,
-    ext_alu_op2,
-    ext_alu_op,
-    csr_alu_in
+    external_alu_operand_a,
+    external_alu_operand_b,
+    external_alu_operation,
+    external_alu_control_input
   };
 
-  // Get the ALU state from FU stage
+  // Receive computation result and status from FU stage
   assign {
-    ext_alu_result,
-    csr_alu_out
+    external_alu_result,
+    external_alu_status_output
   } = from_FU_to_DE;
 
-  // Get invididual components from csr_alu_out
-  wire ext_alu_result_valid;
-  wire ext_alu_ready_2;
-  wire ext_alu_ready_1;
+  // Decode status bits for improved readability
+  // Bit[0]: Operand A is stable and ready
+  // Bit[1]: Operand B is stable and ready
+  // Bit[2]: Computation result is valid
+  wire operand_a_ready;
+  wire operand_b_ready;
+  wire result_valid;
 
-  assign ext_alu_ready_1 = csr_alu_out[0];
-  assign ext_alu_ready_2 = csr_alu_out[1]; 
-  assign ext_alu_result_valid = csr_alu_out[2];
+  assign operand_a_ready = external_alu_status_output[0];
+  assign operand_b_ready = external_alu_status_output[1]; 
+  assign result_valid    = external_alu_status_output[2];
 
-  // At reset or beginning continue based on stall
+  // State machine: advance state on clock edge
   always @(posedge clk or posedge reset) begin
-    // Advance state machine if no stall
     if (reset)
-      ext_alu_state <= `LOAD_ALUOP;
+      external_alu_current_state <= `EXT_ALU_STATE_LOAD_OPERATION;
     else
-      ext_alu_state <= ext_alu_next_state;
+      external_alu_current_state <= external_alu_next_state;
   end
 
-  // Load operands 1 and 2 and ALUOP
+  // Operand and operation loading logic
   always @(posedge clk) begin
-    // If reset then all ALU ops must be 0
     if (reset) begin
-      ext_alu_op <= 0;
-      ext_alu_op1 <= 0;
-      ext_alu_op2 <= 0;
-    // Only proceed if ALU is ready
-    end else if (!stall_pipeline_ext_alu) begin
-      if (ext_alu_state == `ALU_CYCLING && ext_alu_result_valid)
-        reg_file[`OP3_REG_IDX] <= ext_alu_result;
-      else if (ext_alu_state == `LOAD_ALUOP) begin
-        ext_alu_op1 <= `ALUDATABITS'd0;
-        ext_alu_op2 <= `ALUDATABITS'd0;
-      end else if (wregno_WB == `ALUOP_REG_IDX)
-        ext_alu_op <= regval_WB[`ALUOPBITS - 1: 0];
-      else if (wregno_WB == `OP1_REG_IDX)
-        ext_alu_op1 <= regval_WB;
-      else if (wregno_WB == `OP2_REG_IDX)
-        ext_alu_op2 <= regval_WB;
+      external_alu_operation <= 0;
+      external_alu_operand_a <= 0;
+      external_alu_operand_b <= 0;
+    end else if (!stall_for_external_alu) begin
+      // Store result to register file when computation completes
+      if (external_alu_current_state == `EXT_ALU_STATE_COMPUTING && result_valid)
+        reg_file[`EXT_ALU_RESULT_REG] <= external_alu_result;
+      // Initialize operands when starting new operation
+      else if (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERATION) begin
+        external_alu_operand_a <= `ALUDATABITS'd0;
+        external_alu_operand_b <= `ALUDATABITS'd0;
+      end 
+      // Load operation code from register file write-back
+      else if (wregno_WB == `EXT_ALU_OPERATION_REG)
+        external_alu_operation <= regval_WB[`ALUOPBITS - 1: 0];
+      // Load operand A from register file write-back
+      else if (wregno_WB == `EXT_ALU_OPERAND_A_REG)
+        external_alu_operand_a <= regval_WB;
+      // Load operand B from register file write-back
+      else if (wregno_WB == `EXT_ALU_OPERAND_B_REG)
+        external_alu_operand_b <= regval_WB;
     end
   end
 
-  // Stall if loading but not ready
-  wire stall_pipeline_ext_alu;
-  assign stall_pipeline_ext_alu = (ext_alu_state == `LOAD_OP_1 && !ext_alu_ready_1) || (ext_alu_state == `LOAD_OP_2 && !ext_alu_ready_2);
+  // Pipeline stall logic: stall when waiting for operands to be acknowledged
+  wire stall_for_external_alu;
+  assign stall_for_external_alu = 
+    (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_A && !operand_a_ready) || 
+    (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_B && !operand_b_ready);
 
-  // Define next state based on current state
-  // and tell external ALU to act on state transition
-  // input csr: bit 0 is whether alu results can be overwritten
-  // input csr: bit 1 is whether the first operand is stable
-  // input csr: bit 2 is whether the second operand is stable
+  // State transition logic with control signal generation
+  // Control input bits to external ALU:
+  //   Bit[0]: Can overwrite result (safe to write new result)
+  //   Bit[1]: Operand A is stable (loaded and valid)
+  //   Bit[2]: Operand B is stable (loaded and valid)
   always @(*) begin
-    ext_alu_next_state = ext_alu_state;
+    external_alu_next_state = external_alu_current_state;
 
-    case (ext_alu_state)
-      `LOAD_ALUOP: begin
-        csr_alu_in = 3'b000;
-        ext_alu_next_state = `LOAD_OP_1;
+    case (external_alu_current_state)
+      `EXT_ALU_STATE_LOAD_OPERATION: begin
+        external_alu_control_input = 3'b000;                    // No operands ready yet
+        external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERAND_A;
       end
-      `LOAD_OP_1: begin
-        csr_alu_in = 3'b000;
-        // If operand 1 is ready, get op 2
-        if (ext_alu_ready_1 && ext_alu_op1 != 0) begin
-          csr_alu_in = 3'b010;
-          ext_alu_next_state = `LOAD_OP_2;
+      
+      `EXT_ALU_STATE_LOAD_OPERAND_A: begin
+        external_alu_control_input = 3'b000;                    // Loading operand A
+        // Proceed to load operand B when A is ready and non-zero
+        if (operand_a_ready && external_alu_operand_a != 0) begin
+          external_alu_control_input = 3'b010;                  // Signal operand A stable
+          external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERAND_B;
         end
       end
-      `LOAD_OP_2: begin
-        csr_alu_in = 3'b010;
-        // If operand 2 is ready and op is ready, proceed to do ALU cycles
-        if (ext_alu_ready_2 && ext_alu_op2 != 0 && ext_alu_op != 0) begin
-          csr_alu_in = 3'b110;
-          ext_alu_next_state = `ALU_CYCLING;
+      
+      `EXT_ALU_STATE_LOAD_OPERAND_B: begin
+        external_alu_control_input = 3'b010;                    // Operand A stable
+        // Start computation when B is ready and operation code is loaded
+        if (operand_b_ready && external_alu_operand_b != 0 && external_alu_operation != 0) begin
+          external_alu_control_input = 3'b110;                  // Both operands stable
+          external_alu_next_state = `EXT_ALU_STATE_COMPUTING;
         end
       end
-      `ALU_CYCLING: begin
-        csr_alu_in = 3'b110;
-        // If the result is valid, then we can write to mem
-        if (ext_alu_result_valid) begin
-          csr_alu_in = 3'b111;
-          ext_alu_next_state = `ALU_STORE;
+      
+      `EXT_ALU_STATE_COMPUTING: begin
+        external_alu_control_input = 3'b110;                    // Computing
+        // Move to store when result becomes valid
+        if (result_valid) begin
+          external_alu_control_input = 3'b111;                  // Result valid, can overwrite
+          external_alu_next_state = `EXT_ALU_STATE_STORE_RESULT;
         end
       end
-      `ALU_STORE: begin
-        csr_alu_in = 3'b111;
-        ext_alu_next_state = `LOAD_ALUOP;
+      
+      `EXT_ALU_STATE_STORE_RESULT: begin
+        external_alu_control_input = 3'b111;                    // Storing result
+        external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERATION; // Return to initial state
       end
+      
       default: begin
-        // Incase we have undefined behavior
-        csr_alu_in = 3'b000;
-        ext_alu_next_state = `LOAD_ALUOP;
+        external_alu_control_input = 3'b000;                    // Safe default
+        external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERATION;
       end
     endcase
   end

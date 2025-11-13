@@ -221,12 +221,14 @@
 `define from_WB_to_MEM_WIDTH    (1)
 
 //TODO: part2/bonus modify as necessary
-`define ALU_STATE_BITS          (3)
-`define LOAD_ALUOP              3'b000
-`define LOAD_OP_1               3'b001
-`define LOAD_OP_2               3'b010
-`define ALU_CYCLING             3'b011
-`define ALU_STORE               3'b100
+`define EXT_ALU_STATE_BITS              (3)
+
+// State definitions for external ALU operation sequence
+`define EXT_ALU_STATE_LOAD_OPERATION    3'b000  // Load ALU operation code
+`define EXT_ALU_STATE_LOAD_OPERAND_A    3'b001  // Load first operand
+`define EXT_ALU_STATE_LOAD_OPERAND_B    3'b010  // Load second operand
+`define EXT_ALU_STATE_COMPUTING         3'b011  // ALU performing computation
+`define EXT_ALU_STATE_STORE_RESULT      3'b100  // Store result to register file
 
 `define from_DE_to_FU_WIDTH  (`ALUDATABITS+`ALUDATABITS+`ALUOPBITS+`ALUCSRINBITS)
 `define from_FU_to_DE_WIDTH  (`ALUDATABITS+`ALUCSROUTBITS)
