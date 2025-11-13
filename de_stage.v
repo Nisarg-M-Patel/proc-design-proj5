@@ -469,8 +469,11 @@ module DE_STAGE(
           5'd29: alu_operation <= regval_WB[`ALUOPBITS-1:0];  // ALUOP
           5'd30: alu_operand_a <= regval_WB;                  // OP1
           5'd31: alu_operand_b <= regval_WB;                  // OP2
+          default: begin
+            // Do nothing for other register writes
+          end
         endcase
-      end
+      end 
     end
   end
   
