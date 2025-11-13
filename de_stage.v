@@ -398,8 +398,8 @@ module DE_STAGE(
   reg [`ALUDATABITS - 1: 0]  external_alu_operand_b;      // Second operand
 
   // State machine registers
-  reg [`EXT_ALU_STATE_BITS - 1: 0] external_alu_current_state;
-  reg [`EXT_ALU_STATE_BITS - 1: 0] external_alu_next_state;
+  reg [`ALU_STATE_BITS - 1: 0] external_alu_current_state;
+  reg [`ALU_STATE_BITS - 1: 0] external_alu_next_state;
 
   // Status signals from FU stage (CSR output from external ALU)
   reg [`ALUCSROUTBITS - 1: 0] external_alu_status_output;
@@ -453,20 +453,20 @@ module DE_STAGE(
     end else if (!stall_for_external_alu) begin
       // Store result to register file when computation completes
       if (external_alu_current_state == `EXT_ALU_STATE_COMPUTING && result_valid)
-        reg_file[`EXT_ALU_RESULT_REG] <= external_alu_result;
+        reg_file[`OP3_REG_IDX] <= external_alu_result;
       // Initialize operands when starting new operation
       else if (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERATION) begin
         external_alu_operand_a <= `ALUDATABITS'd0;
         external_alu_operand_b <= `ALUDATABITS'd0;
       end 
       // Load operation code from register file write-back
-      else if (wregno_WB == `EXT_ALU_OPERATION_REG)
+      else if (wregno_WB == `ALUOP_REG_IDX)
         external_alu_operation <= regval_WB[`ALUOPBITS - 1: 0];
       // Load operand A from register file write-back
-      else if (wregno_WB == `EXT_ALU_OPERAND_A_REG)
+      else if (wregno_WB == `OP1_REG_IDX)
         external_alu_operand_a <= regval_WB;
       // Load operand B from register file write-back
-      else if (wregno_WB == `EXT_ALU_OPERAND_B_REG)
+      else if (wregno_WB == `OP2_REG_IDX)
         external_alu_operand_b <= regval_WB;
     end
   end
