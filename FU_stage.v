@@ -43,6 +43,20 @@ module FU_STAGE(
   localparam COMPUTING     = 3'd5;
   localparam RESULT_READY  = 3'd6;
   
+  // Debug - print on any activity
+  always @(posedge clk) begin
+    if (!reset) begin
+      if (wr_aluop) $display("[%0t] FU: wr_aluop=1, wr_data=%h", $time, wr_data);
+      if (wr_op1) $display("[%0t] FU: wr_op1=1, wr_data=%h", $time, wr_data);
+      if (wr_op2) $display("[%0t] FU: wr_op2=1, wr_data=%h", $time, wr_data);
+      if (rd_op3) $display("[%0t] FU: rd_op3=1", $time);
+      if (state != IDLE || wr_aluop || wr_op1 || wr_op2 || rd_op3) begin
+        $display("[%0t] FU: state=%0d, CSR_IN=%b, CSR_OUT=%b, ALUOP=%h, OP1=%h, OP2=%h, OP3=%h, op2_rdy=%b", 
+                 $time, state, CSR_ALU_IN, CSR_ALU_OUT, ALUOP_reg, OP1_reg, OP2_reg, OP3, op2_ready);
+      end
+    end
+  end
+  
   always @(posedge clk) begin
     if (reset) begin
       state <= IDLE;
@@ -55,17 +69,20 @@ module FU_STAGE(
       // Capture ALUOP anytime
       if (wr_aluop) begin
         ALUOP_reg <= wr_data[`ALUOPBITS-1:0];
+        $display("[%0t] FU: Captured ALUOP=%h", $time, wr_data[`ALUOPBITS-1:0]);
       end
       
       // Capture OP1 anytime
       if (wr_op1) begin
         OP1_reg <= wr_data;
+        $display("[%0t] FU: Captured OP1=%h", $time, wr_data);
       end
       
       // Capture OP2 anytime and track readiness
       if (wr_op2) begin
         OP2_reg <= wr_data;
         op2_ready <= 1'b1;
+        $display("[%0t] FU: Captured OP2=%h, setting op2_ready=1", $time, wr_data);
       end
       
       case (state)
@@ -75,18 +92,21 @@ module FU_STAGE(
           
           // Start immediately when OP1 is written
           if (wr_op1) begin
+            $display("[%0t] FU: IDLE->WAIT_OP1 because wr_op1=1", $time);
             state <= WAIT_OP1;
           end
         end
         
         WAIT_OP1: begin
           if (CSR_ALU_OUT[0]) begin  // OP1 port ready
+            $display("[%0t] FU: WAIT_OP1->LOAD_OP1, CSR_OUT[0]=1", $time);
             CSR_ALU_IN[1] <= 1'b1;   // Signal OP1 is stable
             state <= LOAD_OP1;
           end
         end
         
         LOAD_OP1: begin
+          $display("[%0t] FU: LOAD_OP1->WAIT_OP2", $time);
           CSR_ALU_IN[1] <= 1'b0;
           state <= WAIT_OP2;
         end
@@ -94,18 +114,22 @@ module FU_STAGE(
         WAIT_OP2: begin
           // Wait for BOTH OP2 ready AND ALU ready for OP2
           if (op2_ready && CSR_ALU_OUT[1]) begin
+            $display("[%0t] FU: WAIT_OP2->LOAD_OP2, op2_rdy=%b, CSR_OUT[1]=%b", 
+                     $time, op2_ready, CSR_ALU_OUT[1]);
             CSR_ALU_IN[2] <= 1'b1;   // Signal OP2 is stable
             state <= LOAD_OP2;
           end
         end
         
         LOAD_OP2: begin
+          $display("[%0t] FU: LOAD_OP2->COMPUTING", $time);
           CSR_ALU_IN[2] <= 1'b0;
           state <= COMPUTING;
         end
         
         COMPUTING: begin
           if (CSR_ALU_OUT[2]) begin  // Result valid
+            $display("[%0t] FU: COMPUTING->RESULT_READY, result=%h", $time, OP3);
             CSR_ALU_IN[0] <= 1'b1;   // Protect result
             state <= RESULT_READY;
           end
@@ -113,12 +137,14 @@ module FU_STAGE(
         
         RESULT_READY: begin
           if (rd_op3) begin
+            $display("[%0t] FU: RESULT_READY->IDLE, CPU read result", $time);
             CSR_ALU_IN[0] <= 1'b0;
             state <= IDLE;
           end
         end
         
         default: begin
+          $display("[%0t] FU: DEFAULT->IDLE", $time);
           state <= IDLE;
           CSR_ALU_IN <= 3'b000;
         end
