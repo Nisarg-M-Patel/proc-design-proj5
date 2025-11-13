@@ -224,6 +224,7 @@
 `define EXT_ALU_STATE_BITS              (3)
 
 // State definitions for external ALU operation sequence
+`define ALU_STATE_BITS (3)
 `define EXT_ALU_STATE_LOAD_OPERATION    3'b000  // Load ALU operation code
 `define EXT_ALU_STATE_LOAD_OPERAND_A    3'b001  // Load first operand
 `define EXT_ALU_STATE_LOAD_OPERAND_B    3'b010  // Load second operand
