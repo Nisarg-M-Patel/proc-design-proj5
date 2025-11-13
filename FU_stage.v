@@ -1,3 +1,5 @@
+`include "define.vh" 
+
 module FU_STAGE(
   input wire clk,
   input wire reset,
@@ -42,10 +44,19 @@ module FU_STAGE(
   localparam COMPUTING     = 3'd5;
   localparam RESULT_READY  = 3'd6;
   
+  // Debug output
+  always @(posedge clk) begin
+    if (!reset && (wr_aluop || wr_op1 || wr_op2 || rd_op3 || state != IDLE)) begin
+      $display("[%0t] FU: state=%0d, CSR_IN=%b, CSR_OUT=%b, ALUOP=%h, OP1=%h, OP2=%h, OP3=%h, wr_aluop=%b, wr_op1=%b, wr_op2=%b, rd_op3=%b, op1_wr=%b, op2_wr=%b", 
+               $time, state, CSR_ALU_IN, CSR_ALU_OUT, ALUOP_reg, OP1_reg, OP2_reg, OP3, 
+               wr_aluop, wr_op1, wr_op2, rd_op3, op1_written, op2_written);
+    end
+  end
+  
   always @(posedge clk) begin
     if (reset) begin
       state <= IDLE;
-      CSR_ALU_IN <= 3'b001;
+      CSR_ALU_IN <= 3'b000;
       ALUOP_reg <= 4'b0;
       OP1_reg <= 32'b0;
       OP2_reg <= 32'b0;
@@ -71,7 +82,7 @@ module FU_STAGE(
       
       case (state)
         IDLE: begin
-          CSR_ALU_IN <= 3'b001;
+          CSR_ALU_IN <= 3'b000;
           op1_written <= 1'b0;
           op2_written <= 1'b0;
           
@@ -107,11 +118,10 @@ module FU_STAGE(
         end
         
         COMPUTING: begin
+          // Keep checking for result
           if (CSR_ALU_OUT[2]) begin  // Result valid
-            CSR_ALU_IN[0] <= 1'b1;   // NOW protect result
+            CSR_ALU_IN[0] <= 1'b1;   // Protect result
             state <= RESULT_READY;
-          end else begin
-            CSR_ALU_IN[0] <= 1'b0;   // Keep allowing ALU to write
           end
         end
         
@@ -124,7 +134,7 @@ module FU_STAGE(
         
         default: begin
           state <= IDLE;
-          CSR_ALU_IN <= 3'b001;
+          CSR_ALU_IN <= 3'b000;
         end
       endcase
     end
