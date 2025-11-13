@@ -27,9 +27,9 @@ module FU_STAGE(
   
   reg [2:0] state;
   localparam IDLE          = 3'd0;
-  localparam LOAD_ALUOP    = 3'd1;  // Waiting for ALUOP write
-  localparam LOAD_OP1      = 3'd2;  // Waiting for OP1 write & CSR ready
-  localparam LOAD_OP2      = 3'd3;  // Waiting for OP2 write & CSR ready
+  localparam LOAD_ALUOP    = 3'd1;
+  localparam LOAD_OP1      = 3'd2;
+  localparam LOAD_OP2      = 3'd3;
   localparam COMPUTING     = 3'd4;
   localparam RESULT_READY  = 3'd5;
   
@@ -45,7 +45,6 @@ module FU_STAGE(
         IDLE: begin
           CSR_ALU_IN <= 3'b000;
           
-          // Wait for ALUOP write to start
           if (wr_aluop) begin
             ALUOP_reg <= wr_data[`ALUOPBITS-1:0];
             state <= LOAD_ALUOP;
@@ -53,7 +52,6 @@ module FU_STAGE(
         end
         
         LOAD_ALUOP: begin
-          // Wait for OP1 write
           if (wr_op1) begin
             OP1_reg <= wr_data;
             state <= LOAD_OP1;
@@ -61,38 +59,33 @@ module FU_STAGE(
         end
         
         LOAD_OP1: begin
-          // Wait for ALU to be ready for OP1, then signal it's stable
           if (CSR_ALU_OUT[0]) begin
-            CSR_ALU_IN[1] <= 1'b1;  // Signal OP1 valid
+            CSR_ALU_IN[1] <= 1'b1;
             
-            // If OP2 also written, move on
             if (wr_op2) begin
               OP2_reg <= wr_data;
               state <= LOAD_OP2;
             end
           end
-          // Capture OP2 if it arrives while waiting
           else if (wr_op2) begin
             OP2_reg <= wr_data;
           end
         end
         
         LOAD_OP2: begin
-          CSR_ALU_IN[1] <= 1'b0;  // Clear OP1 strobe
+          CSR_ALU_IN[1] <= 1'b0;
           
-          // Wait for ALU ready for OP2, then signal
           if (CSR_ALU_OUT[1]) begin
-            CSR_ALU_IN[2] <= 1'b1;  // Signal OP2 valid
+            CSR_ALU_IN[2] <= 1'b1;
             state <= COMPUTING;
           end
         end
         
         COMPUTING: begin
-          CSR_ALU_IN[2] <= 1'b0;  // Clear OP2 strobe
+          CSR_ALU_IN[2] <= 1'b0;
           
-          // Wait for result valid
           if (CSR_ALU_OUT[2]) begin
-            CSR_ALU_IN[0] <= 1'b1;  // Protect result
+            CSR_ALU_IN[0] <= 1'b1;
             state <= RESULT_READY;
           end
         end
@@ -102,6 +95,11 @@ module FU_STAGE(
             CSR_ALU_IN[0] <= 1'b0;
             state <= IDLE;
           end
+        end
+        
+        default: begin
+          state <= IDLE;
+          CSR_ALU_IN <= 3'b000;
         end
       endcase
     end
