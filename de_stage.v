@@ -299,50 +299,7 @@ module DE_STAGE(
     endcase
   end
   
-  /////////////////////////////////////////////////////////////////////////////
-  // External ALU Integration
-  /////////////////////////////////////////////////////////////////////////////
-  
-  // Unpack signals from FU stage (35-bit bus)
-  wire [`DBITS-1:0] op3_from_fu;
-  wire [2:0] csr_out_from_fu;
-  //wire alu_busy_from_fu;
-  
-  assign op3_from_fu = {from_FU_to_DE[31:0]};  // Sign-extend bit 30
-  assign csr_out_from_fu = from_FU_to_DE[34:32];
-  //assign alu_busy_from_fu = from_FU_to_DE[34];
-  
-  // Detect ALU register operations
-  wire is_wr_aluop = wr_reg_WB && (wregno_WB == 5'd29);
-  wire is_wr_op1   = wr_reg_WB && (wregno_WB == 5'd30);
-  wire is_wr_op2   = wr_reg_WB && (wregno_WB == 5'd31);
-  wire is_rd_op3   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd27);
-  wire is_rd_csr   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd26);
-  
-  // Pack signals to FU stage (71-bit bus)
-  assign from_DE_to_FU = {
-    {35{1'b0}},     // Bits [70:36] - unused padding
-    is_rd_op3,      // Bit [35]
-    regval_WB,      // Bits [34:3]
-    is_wr_op2,      // Bit [2]
-    is_wr_op1,      // Bit [1]
-    is_wr_aluop     // Bit [0]
-  };
-  
-  // Override rs2_val for SW instructions reading from ALU registers
-  wire [`DBITS-1:0] rs2_val_final_DE;
-  assign rs2_val_final_DE = (rs2_DE == 5'd27) ? op3_from_fu :
-                            (rs2_DE == 5'd26) ? {{29{1'b0}}, csr_out_from_fu} :
-                            rs2_val_DE;
-  
-  // Stall if trying to load to ALU registers while ALU is busy
-  //wire alu_stall;
-  //assign alu_stall = alu_busy_from_fu && valid_DE && (op_I_DE == `LW_I) && 
-  //                   ((rd_DE == 5'd29) || (rd_DE == 5'd30) || (rd_DE == 5'd31));
-  
-  /////////////////////////////////////////////////////////////////////////////
   // Handle data dependency
-  /////////////////////////////////////////////////////////////////////////////
 
   reg [31:0] in_use_regs;
   wire has_data_hazards;
@@ -372,8 +329,6 @@ module DE_STAGE(
   end
 
   /////////////////////////////////////////////////////////////////////////////
-  // Register file
-  /////////////////////////////////////////////////////////////////////////////
 
   // register file initialization
   initial begin
@@ -381,10 +336,10 @@ module DE_STAGE(
       reg_file[i] = '0;
   end
 
-  // register file update - exclude ALU registers (x26-x31)
+  // register file update - exclude ALU registers
   always @ (negedge clk) begin 
     if (wr_reg_WB) begin
-      // Don't write ALU registers to normal register file
+      // Don't write to ALU special registers (x26, x27, x29, x30, x31)
       if ((wregno_WB != 5'd26) && (wregno_WB != 5'd27) && 
           (wregno_WB != 5'd29) && (wregno_WB != 5'd30) && (wregno_WB != 5'd31)) begin
         reg_file[wregno_WB] <= regval_WB; 
@@ -392,9 +347,8 @@ module DE_STAGE(
     end
   end
 
-  /////////////////////////////////////////////////////////////////////////////
-  // Pipeline latch
-  /////////////////////////////////////////////////////////////////////////////
+  // Forward declaration for ALU bypass (defined below in TODO section)
+  wire [`DBITS-1:0] rs2_val_final_DE;
 
   // the order of latch contents should be matched in the AGEX stage when we extract the contents.
   assign DE_latch_contents = {
@@ -405,7 +359,7 @@ module DE_STAGE(
     pcnext_DE,
     op_I_DE,
     rs1_val_DE,
-    rs2_val_final_DE,    // Use final value with ALU bypass
+    rs2_val_final_DE,    // Use bypassed value for ALU operations
     sxt_imm_DE,
     is_br_DE,
     is_jmp_DE,
@@ -435,5 +389,44 @@ module DE_STAGE(
 
   // send DE latch contents to next pipeline stage
   assign DE_latch_out = DE_latch;
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // External ALU Integration
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  
+  // Unpack signals from FU stage (35-bit bus)
+  // Format: CSR_ALU_OUT[34:32] + OP3[31:0]
+  wire [`DBITS-1:0] op3_from_fu;
+  wire [2:0] csr_out_from_fu;
+  
+  assign op3_from_fu = from_FU_to_DE[31:0];
+  assign csr_out_from_fu = from_FU_to_DE[34:32];
+  
+  // Detect ALU register operations
+  // LW to x29 (ALUOP), x30 (OP1), x31 (OP2) triggers write to ALU
+  wire is_wr_aluop = wr_reg_WB && (wregno_WB == 5'd29);
+  wire is_wr_op1   = wr_reg_WB && (wregno_WB == 5'd30);
+  wire is_wr_op2   = wr_reg_WB && (wregno_WB == 5'd31);
+  
+  // SW from x27 (OP3) or x26 (CSR_ALU_OUT) triggers read from ALU
+  wire is_rd_op3   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd27);
+  wire is_rd_csr   = valid_DE && (op_I_DE == `SW_I) && (rs2_DE == 5'd26);
+  
+  // Pack signals to FU stage (71-bit bus)
+  // Format: padding[70:36] + rd_op3[35] + regval_WB[34:3] + wr_op2[2] + wr_op1[1] + wr_aluop[0]
+  assign from_DE_to_FU = {
+    {35{1'b0}},     // Bits [70:36] - unused padding
+    is_rd_op3,      // Bit [35] - CPU is reading OP3
+    regval_WB,      // Bits [34:3] - data being written to ALU registers
+    is_wr_op2,      // Bit [2] - writing OP2
+    is_wr_op1,      // Bit [1] - writing OP1
+    is_wr_aluop     // Bit [0] - writing ALUOP
+  };
+  
+  // Bypass ALU output for SW instructions
+  // When SW uses x27 or x26 as source, get value from FU instead of register file
+  assign rs2_val_final_DE = (rs2_DE == 5'd27) ? op3_from_fu :
+                            (rs2_DE == 5'd26) ? {{29{1'b0}}, csr_out_from_fu} :
+                            rs2_val_DE;
 
 endmodule
