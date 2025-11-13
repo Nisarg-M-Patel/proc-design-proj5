@@ -90,9 +90,9 @@ module FU_STAGE(
           CSR_ALU_IN <= 3'b000;
           op2_ready <= 1'b0;
           
-          // Start immediately when OP1 is written
-          if (wr_op1) begin
-            $display("[%0t] FU: IDLE->WAIT_OP1 because wr_op1=1", $time);
+          // Start when ALUOP is written (not wr_op1!)
+          if (wr_aluop) begin
+            $display("[%0t] FU: IDLE->WAIT_OP1 because wr_aluop=1", $time);
             state <= WAIT_OP1;
           end
         end
