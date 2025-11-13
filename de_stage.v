@@ -313,7 +313,8 @@ module DE_STAGE(
   assign has_data_hazards = (use_rs1_DE && in_use_regs[rs1_DE]) 
                          || (use_rs2_DE && in_use_regs[rs2_DE]);
 
-  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX;
+  //TODO: part2/bonus modify as necessary
+  assign pipeline_stall_DE = has_data_hazards || br_mispred_AGEX || stall_pipeline_ext_alu;
 
   always @(posedge clk) begin
     if (reset) begin
@@ -336,19 +337,12 @@ module DE_STAGE(
       reg_file[i] = '0;
   end
 
-  // register file update - exclude ALU registers
+  // register file update
   always @ (negedge clk) begin 
     if (wr_reg_WB) begin
-      // Don't write to ALU special registers (x26, x27, x29, x30, x31)
-      if ((wregno_WB != 5'd26) && (wregno_WB != 5'd27) && 
-          (wregno_WB != 5'd29) && (wregno_WB != 5'd30) && (wregno_WB != 5'd31)) begin
-        reg_file[wregno_WB] <= regval_WB; 
-      end
+		  reg_file[wregno_WB] <= regval_WB; 
     end
   end
-
-  // Forward declaration for ALU bypass (defined below in TODO section)
-  wire [`DBITS-1:0] rs2_val_final_DE;
 
   // the order of latch contents should be matched in the AGEX stage when we extract the contents.
   assign DE_latch_contents = {
@@ -359,7 +353,7 @@ module DE_STAGE(
     pcnext_DE,
     op_I_DE,
     rs1_val_DE,
-    rs2_val_final_DE,    // Use bypassed value for ALU operations
+    rs2_val_DE,    
     sxt_imm_DE,
     is_br_DE,
     is_jmp_DE,
@@ -391,143 +385,138 @@ module DE_STAGE(
   assign DE_latch_out = DE_latch;
 
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // External ALU Integration
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  
-  // Storage for ALU operation and operands
-  reg [`ALUOPBITS-1:0] alu_operation;
-  reg [`ALUDATABITS-1:0] alu_operand_a;
-  reg [`ALUDATABITS-1:0] alu_operand_b;
-  
-  // Handshake protocol state machine
-  reg [2:0] alu_protocol_state;
-  reg [2:0] alu_protocol_next;
-  
-  localparam STATE_WAIT_OP      = 3'd0;
-  localparam STATE_WAIT_FIRST   = 3'd1;
-  localparam STATE_WAIT_SECOND  = 3'd2;
-  localparam STATE_EXECUTE      = 3'd3;
-  localparam STATE_COMPLETE     = 3'd4;
-  
-  // Control signals for handshake
-  reg [2:0] handshake_control;
-  wire [2:0] handshake_status;
-  wire [`ALUDATABITS-1:0] alu_output;
-  
-  // Status bits from ALU
-  wire first_operand_ready;
-  wire second_operand_ready;
-  wire computation_done;
-  
-  assign first_operand_ready = handshake_status[0];
-  assign second_operand_ready = handshake_status[1];
-  assign computation_done = handshake_status[2];
-  
-  // Connect to FU stage
+  //TODO: add your code here to load operands, ALUOP; 
+  //store results to memory; 
+  //forward data and control signals to FU stage; 
+  //fetch status update from FU stage; 
+  //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
+  //Need to handle the stalls from part2 
+
+  // Registers for ALU operands and ALUOP
+  reg [`ALUOPBITS - 1: 0] ext_alu_op;
+  reg [`ALUDATABITS - 1: 0] ext_alu_op1;
+  reg [`ALUDATABITS - 1: 0] ext_alu_op2;
+
+    // State transitions are in define
+  reg [`ALU_STATE_BITS - 1: 0] ext_alu_state;
+  reg [`ALU_STATE_BITS - 1: 0] ext_alu_next_state;
+
+  // Get CSR_ALU_OUT from FU stage from external ALU
+  reg [`ALUCSROUTBITS - 1: 0] csr_alu_out;
+
+  // Define external ALU result
+  wire [`ALUDATABITS - 1: 0] ext_alu_result;
+
+  // Define CSR_ALU_IN so we can forward
+  reg [`ALUCSRINBITS - 1: 0] csr_alu_in;
+
+  // Forward relevant data to FU stage
   assign from_DE_to_FU = {
-    alu_operand_a,
-    alu_operand_b,
-    alu_operation,
-    handshake_control
+    ext_alu_op1,
+    ext_alu_op2,
+    ext_alu_op,
+    csr_alu_in
   };
-  
-  assign {alu_output, handshake_status} = from_FU_to_DE;
-  
-  // Determine if pipeline needs to stall for ALU
-  wire alu_needs_stall;
-  assign alu_needs_stall = 
-    (alu_protocol_state == STATE_WAIT_FIRST && !first_operand_ready) ||
-    (alu_protocol_state == STATE_WAIT_SECOND && !second_operand_ready);
-  
-  // Update state on clock edge
-  always @(posedge clk) begin
+
+  // Get the ALU state from FU stage
+  assign {
+    ext_alu_result,
+    csr_alu_out
+  } = from_FU_to_DE;
+
+  // Get invididual components from csr_alu_out
+  wire ext_alu_result_valid;
+  wire ext_alu_ready_2;
+  wire ext_alu_ready_1;
+
+  assign ext_alu_ready_1 = csr_alu_out[0];
+  assign ext_alu_ready_2 = csr_alu_out[1]; 
+  assign ext_alu_result_valid = csr_alu_out[2];
+
+  // At reset or beginning continue based on stall
+  always @(posedge clk or posedge reset) begin
+    // Advance state machine if no stall
     if (reset)
-      alu_protocol_state <= STATE_WAIT_OP;
+      ext_alu_state <= `LOAD_ALUOP;
     else
-      alu_protocol_state <= alu_protocol_next;
+      ext_alu_state <= ext_alu_next_state;
   end
-  
-  // Capture operands and manage computation
+
+  // Load operands 1 and 2 and ALUOP
   always @(posedge clk) begin
+    // If reset then all ALU ops must be 0
     if (reset) begin
-      alu_operation <= 4'd0;
-      alu_operand_a <= 32'd0;
-      alu_operand_b <= 32'd0;
-    end else if (!alu_needs_stall) begin
-      // Store result when computation completes
-      if (alu_protocol_state == STATE_EXECUTE && computation_done) begin
-        reg_file[5'd27] <= alu_output;  // Write to x27 (OP3)
-      end
-      // Clear operands at start of new operation
-      else if (alu_protocol_state == STATE_WAIT_OP) begin
-        alu_operand_a <= 32'd0;
-        alu_operand_b <= 32'd0;
-      end
-      // Capture values during writeback phase
-      else if (wr_reg_WB) begin
-        case (wregno_WB)
-          5'd29: alu_operation <= regval_WB[`ALUOPBITS-1:0];  // ALUOP
-          5'd30: alu_operand_a <= regval_WB;                  // OP1
-          5'd31: alu_operand_b <= regval_WB;                  // OP2
-          default: begin
-            // Do nothing for other register writes
-          end
-        endcase
-      end 
+      ext_alu_op <= 0;
+      ext_alu_op1 <= 0;
+      ext_alu_op2 <= 0;
+    // Only proceed if ALU is ready
+    end else if (!stall_pipeline_ext_alu) begin
+      if (ext_alu_state == `ALU_CYCLING && ext_alu_result_valid)
+        reg_file[`OP3_REG_IDX] <= ext_alu_result;
+      else if (ext_alu_state == `LOAD_ALUOP) begin
+        ext_alu_op1 <= `ALUDATABITS'd0;
+        ext_alu_op2 <= `ALUDATABITS'd0;
+      end else if (wregno_WB == `ALUOP_REG_IDX)
+        ext_alu_op <= regval_WB[`ALUOPBITS - 1: 0];
+      else if (wregno_WB == `OP1_REG_IDX)
+        ext_alu_op1 <= regval_WB;
+      else if (wregno_WB == `OP2_REG_IDX)
+        ext_alu_op2 <= regval_WB;
     end
   end
-  
-  // State machine and handshake control generation
+
+  // Stall if loading but not ready
+  wire stall_pipeline_ext_alu;
+  assign stall_pipeline_ext_alu = (ext_alu_state == `LOAD_OP_1 && !ext_alu_ready_1) || (ext_alu_state == `LOAD_OP_2 && !ext_alu_ready_2);
+
+  // Define next state based on current state
+  // and tell external ALU to act on state transition
+  // input csr: bit 0 is whether alu results can be overwritten
+  // input csr: bit 1 is whether the first operand is stable
+  // input csr: bit 2 is whether the second operand is stable
   always @(*) begin
-    // Default: stay in current state
-    alu_protocol_next = alu_protocol_state;
-    handshake_control = 3'b000;
-    
-    case (alu_protocol_state)
-      STATE_WAIT_OP: begin
-        // Waiting for operation to begin
-        handshake_control = 3'b000;
-        alu_protocol_next = STATE_WAIT_FIRST;
+    ext_alu_next_state = ext_alu_state;
+
+    case (ext_alu_state)
+      `LOAD_ALUOP: begin
+        csr_alu_in = 3'b000;
+        ext_alu_next_state = `LOAD_OP_1;
       end
-      
-      STATE_WAIT_FIRST: begin
-        // Waiting for first operand acknowledgment
-        handshake_control = 3'b000;
-        if (first_operand_ready && (alu_operand_a != 32'd0)) begin
-          handshake_control = 3'b010;  // Signal first operand ready
-          alu_protocol_next = STATE_WAIT_SECOND;
+      `LOAD_OP_1: begin
+        csr_alu_in = 3'b000;
+        // If operand 1 is ready, get op 2
+        if (ext_alu_ready_1 && ext_alu_op1 != 0) begin
+          csr_alu_in = 3'b010;
+          ext_alu_next_state = `LOAD_OP_2;
         end
       end
-      
-      STATE_WAIT_SECOND: begin
-        // Waiting for second operand acknowledgment
-        handshake_control = 3'b010;
-        if (second_operand_ready && (alu_operand_b != 32'd0) && (alu_operation != 4'd0)) begin
-          handshake_control = 3'b110;  // Signal second operand ready
-          alu_protocol_next = STATE_EXECUTE;
+      `LOAD_OP_2: begin
+        csr_alu_in = 3'b010;
+        // If operand 2 is ready and op is ready, proceed to do ALU cycles
+        if (ext_alu_ready_2 && ext_alu_op2 != 0 && ext_alu_op != 0) begin
+          csr_alu_in = 3'b110;
+          ext_alu_next_state = `ALU_CYCLING;
         end
       end
-      
-      STATE_EXECUTE: begin
-        // Computing result
-        handshake_control = 3'b110;
-        if (computation_done) begin
-          handshake_control = 3'b111;  // Lock result
-          alu_protocol_next = STATE_COMPLETE;
+      `ALU_CYCLING: begin
+        csr_alu_in = 3'b110;
+        // If the result is valid, then we can write to mem
+        if (ext_alu_result_valid) begin
+          csr_alu_in = 3'b111;
+          ext_alu_next_state = `ALU_STORE;
         end
       end
-      
-      STATE_COMPLETE: begin
-        // Result stored, ready for next operation
-        handshake_control = 3'b111;
-        alu_protocol_next = STATE_WAIT_OP;
+      `ALU_STORE: begin
+        csr_alu_in = 3'b111;
+        ext_alu_next_state = `LOAD_ALUOP;
       end
-      
       default: begin
-        handshake_control = 3'b000;
-        alu_protocol_next = STATE_WAIT_OP;
+        // Incase we have undefined behavior
+        csr_alu_in = 3'b000;
+        ext_alu_next_state = `LOAD_ALUOP;
       end
     endcase
   end
+
 
 endmodule
