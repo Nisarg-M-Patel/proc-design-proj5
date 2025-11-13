@@ -221,7 +221,12 @@
 `define from_WB_to_MEM_WIDTH    (1)
 
 //TODO: part2/bonus modify as necessary
-
+`define ALU_STATE_BITS          (3)
+`define LOAD_ALUOP              3'b000
+`define LOAD_OP_1               3'b001
+`define LOAD_OP_2               3'b010
+`define ALU_CYCLING             3'b011
+`define ALU_STORE               3'b100
 
 `define from_DE_to_FU_WIDTH  (`ALUDATABITS+`ALUDATABITS+`ALUOPBITS+`ALUCSRINBITS)
 `define from_FU_to_DE_WIDTH  (`ALUDATABITS+`ALUCSROUTBITS)
