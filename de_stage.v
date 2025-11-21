@@ -392,25 +392,19 @@ module DE_STAGE(
   //Recommended states transition: load aluop --> load op1 --> load op2 --> alu processing --> store results to memory
   //Need to handle the stalls from part2 
 
-  // External ALU operand and operation registers
-  reg [`ALUOPBITS - 1: 0]    external_alu_operation;      // ALU operation code (div=1, mul=2)
-  reg [`ALUDATABITS - 1: 0]  external_alu_operand_a;      // First operand
-  reg [`ALUDATABITS - 1: 0]  external_alu_operand_b;      // Second operand
+  reg [`ALUOPBITS - 1: 0]    external_alu_operation;      
+  reg [`ALUDATABITS - 1: 0]  external_alu_operand_a;      
+  reg [`ALUDATABITS - 1: 0]  external_alu_operand_b;      
 
-  // State machine registers
   reg [`ALU_STATE_BITS - 1: 0] external_alu_current_state;
   reg [`ALU_STATE_BITS - 1: 0] external_alu_next_state;
 
-  // Status signals from FU stage (CSR output from external ALU)
   reg [`ALUCSROUTBITS - 1: 0] external_alu_status_output;
 
-  // Result wire from FU stage
   wire [`ALUDATABITS - 1: 0] external_alu_result;
 
-  // Control signals to FU stage (CSR input to external ALU)
   reg [`ALUCSRINBITS - 1: 0] external_alu_control_input;
 
-  // Forward operands, operation, and control signals to FU stage
   assign from_DE_to_FU = {
     external_alu_operand_a,
     external_alu_operand_b,
@@ -418,16 +412,12 @@ module DE_STAGE(
     external_alu_control_input
   };
 
-  // Receive computation result and status from FU stage
   assign {
     external_alu_result,
     external_alu_status_output
   } = from_FU_to_DE;
 
-  // Decode status bits for improved readability
-  // Bit[0]: Operand A is stable and ready
-  // Bit[1]: Operand B is stable and ready
-  // Bit[2]: Computation result is valid
+  
   wire operand_a_ready;
   wire operand_b_ready;
   wire result_valid;
@@ -436,7 +426,6 @@ module DE_STAGE(
   assign operand_b_ready = external_alu_status_output[1]; 
   assign result_valid    = external_alu_status_output[2];
 
-  // State machine: advance state on clock edge
   always @(posedge clk or posedge reset) begin
     if (reset)
       external_alu_current_state <= `EXT_ALU_STATE_LOAD_OPERATION;
@@ -444,87 +433,73 @@ module DE_STAGE(
       external_alu_current_state <= external_alu_next_state;
   end
 
-  // Operand and operation loading logic
   always @(posedge clk) begin
     if (reset) begin
       external_alu_operation <= 0;
       external_alu_operand_a <= 0;
       external_alu_operand_b <= 0;
     end else if (!stall_for_external_alu) begin
-      // Store result to register file when computation completes
       if (external_alu_current_state == `EXT_ALU_STATE_COMPUTING && result_valid)
         reg_file[`OP3_REG_IDX] <= external_alu_result;
-      // Initialize operands when starting new operation
       else if (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERATION) begin
         external_alu_operand_a <= `ALUDATABITS'd0;
         external_alu_operand_b <= `ALUDATABITS'd0;
       end 
-      // Load operation code from register file write-back
       else if (wregno_WB == `ALUOP_REG_IDX)
         external_alu_operation <= regval_WB[`ALUOPBITS - 1: 0];
-      // Load operand A from register file write-back
       else if (wregno_WB == `OP1_REG_IDX)
         external_alu_operand_a <= regval_WB;
-      // Load operand B from register file write-back
       else if (wregno_WB == `OP2_REG_IDX)
         external_alu_operand_b <= regval_WB;
     end
   end
 
-  // Pipeline stall logic: stall when waiting for operands to be acknowledged
   wire stall_for_external_alu;
   assign stall_for_external_alu = 
     (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_A && !operand_a_ready) || 
     (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_B && !operand_b_ready);
 
-  // State transition logic with control signal generation
-  // Control input bits to external ALU:
-  //   Bit[0]: Can overwrite result (safe to write new result)
-  //   Bit[1]: Operand A is stable (loaded and valid)
-  //   Bit[2]: Operand B is stable (loaded and valid)
+  
   always @(*) begin
     external_alu_next_state = external_alu_current_state;
 
     case (external_alu_current_state)
       `EXT_ALU_STATE_LOAD_OPERATION: begin
-        external_alu_control_input = 3'b000;                    // No operands ready yet
+        external_alu_control_input = 3'b000;                    
         external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERAND_A;
       end
       
       `EXT_ALU_STATE_LOAD_OPERAND_A: begin
-        external_alu_control_input = 3'b000;                    // Loading operand A
-        // Proceed to load operand B when A is ready and non-zero
+        external_alu_control_input = 3'b000;                    
         if (operand_a_ready && external_alu_operand_a != 0) begin
-          external_alu_control_input = 3'b010;                  // Signal operand A stable
+          external_alu_control_input = 3'b010;                  
           external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERAND_B;
         end
       end
       
       `EXT_ALU_STATE_LOAD_OPERAND_B: begin
-        external_alu_control_input = 3'b010;                    // Operand A stable
-        // Start computation when B is ready and operation code is loaded
+        external_alu_control_input = 3'b010;                    
         if (operand_b_ready && external_alu_operand_b != 0 && external_alu_operation != 0) begin
-          external_alu_control_input = 3'b110;                  // Both operands stable
+          external_alu_control_input = 3'b110;                  
           external_alu_next_state = `EXT_ALU_STATE_COMPUTING;
         end
       end
       
       `EXT_ALU_STATE_COMPUTING: begin
-        external_alu_control_input = 3'b110;                    // Computing
-        // Move to store when result becomes valid
+        external_alu_control_input = 3'b110;                    
         if (result_valid) begin
-          external_alu_control_input = 3'b111;                  // Result valid, can overwrite
+          external_alu_control_input = 3'b111;                  
           external_alu_next_state = `EXT_ALU_STATE_STORE_RESULT;
         end
       end
       
       `EXT_ALU_STATE_STORE_RESULT: begin
-        external_alu_control_input = 3'b111;                    // Storing result
-        external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERATION; // Return to initial state
+        external_alu_control_input = 3'b111;                    
+        external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERATION; 
       end
       
       default: begin
-        external_alu_control_input = 3'b000;                    // Safe default
+        external_alu_control_input = 3'b000;                    
         external_alu_next_state = `EXT_ALU_STATE_LOAD_OPERATION;
       end
     endcase
