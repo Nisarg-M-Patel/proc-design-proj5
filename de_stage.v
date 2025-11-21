@@ -454,15 +454,19 @@ module DE_STAGE(
     end
   end
 
-  // Detect if an ALU operation is actually active
-  wire alu_operation_active = (external_alu_operation != 0);
-
   // Detect if current decode instruction writes to ALU operand registers
   wire decode_targets_op1 = valid_DE && wr_reg_DE && (rd_DE == `OP1_REG_IDX);
   wire decode_targets_op2 = valid_DE && wr_reg_DE && (rd_DE == `OP2_REG_IDX);
 
+  // Only stall when an ALU operation is actually in progress
+  wire alu_operation_active = (external_alu_operation != 0);
+
   wire stall_for_external_alu;
   assign stall_for_external_alu = alu_operation_active && (
+      // Original state-based stalls (needed for proper ALU handshaking)
+      (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_A && !operand_a_ready) || 
+      (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_B && !operand_b_ready) ||
+      // New decode-based stalls (for part6 - no NOPs between operand loads)
       (decode_targets_op1 && !operand_a_ready) ||
       (decode_targets_op2 && !operand_b_ready)
   );
