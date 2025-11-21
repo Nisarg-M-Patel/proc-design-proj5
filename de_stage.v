@@ -438,18 +438,23 @@ module DE_STAGE(
       external_alu_operation <= 0;
       external_alu_operand_a <= 0;
       external_alu_operand_b <= 0;
-    end else if (!stall_for_external_alu) begin
+    end else begin
+      // Result capture - always allowed
       if (external_alu_current_state == `EXT_ALU_STATE_COMPUTING && result_valid)
         reg_file[`OP3_REG_IDX] <= external_alu_result;
-      else if (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERATION) begin
+      
+      // Reset operands at start of new operation
+      if (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERATION) begin
         external_alu_operand_a <= `ALUDATABITS'd0;
         external_alu_operand_b <= `ALUDATABITS'd0;
-      end 
-      else if (wregno_WB == `ALUOP_REG_IDX)
+      end
+      
+      // Operand capture from WB - NOT gated by stall
+      if (wr_reg_WB && wregno_WB == `ALUOP_REG_IDX)
         external_alu_operation <= regval_WB[`ALUOPBITS - 1: 0];
-      else if (wregno_WB == `OP1_REG_IDX)
+      else if (wr_reg_WB && wregno_WB == `OP1_REG_IDX)
         external_alu_operand_a <= regval_WB;
-      else if (wregno_WB == `OP2_REG_IDX)
+      else if (wr_reg_WB && wregno_WB == `OP2_REG_IDX)
         external_alu_operand_b <= regval_WB;
     end
   end
