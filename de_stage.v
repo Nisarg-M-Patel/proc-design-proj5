@@ -454,10 +454,13 @@ module DE_STAGE(
     end
   end
 
+  wire decode_targets_op1 = valid_DE && wr_reg_DE && (rd_DE == `OP1_REG_IDX);
+  wire decode_targets_op2 = valid_DE && wr_reg_DE && (rd_DE == `OP2_REG_IDX);
+
   wire stall_for_external_alu;
   assign stall_for_external_alu = 
-    (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_A && !operand_a_ready) || 
-    (external_alu_current_state == `EXT_ALU_STATE_LOAD_OPERAND_B && !operand_b_ready);
+      (decode_targets_op1 && !operand_a_ready) ||
+      (decode_targets_op2 && !operand_b_ready);
 
   
   always @(*) begin
